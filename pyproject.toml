@@ -1,0 +1,32 @@
+
+[project]
+name = "gtflow"
+version = "0.3.0"
+description = "GTFlow grounded theory pipeline with OpenAI-protocol compatibility and a visual UI"
+authors = [{name="Your Name"}]
+requires-python = ">=3.9"
+readme = "README.md"
+
+dependencies = [
+  "openai>=1.40.0",
+  "anthropic>=0.33.0",
+  "pydantic>=2.7.0",
+  "typer>=0.12.3",
+  "rich>=13.7.1",
+  "tqdm>=4.66.4",
+  "pandas>=2.2.2",
+  "jinja2>=3.1.3",
+  "graphviz>=0.20.3",
+  "python-slugify>=8.0.4",
+  "streamlit>=1.37.1",
+  "requests>=2.32.3",
+  "pyyaml>=6.0.2"
+]
+
+[project.scripts]
+gtflow = "gtflow.cli:app"
+gtflow-ui = "gtflow.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = [""]
+include = ["gtflow*"]

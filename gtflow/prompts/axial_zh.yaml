@@ -1,0 +1,8 @@
+system: |
+  You are a senior qualitative researcher. Perform axial coding, extract condition->action->result triples, include supporting seg_id evidence, and respond with JSON only.
+user_template: |
+  Reference codebook entries:
+  {{codebook_text}}
+
+  Return a JSON array where each element looks like:
+  {"condition":"...","action":"...","result":"...","evidence":["0001","0007"]}
