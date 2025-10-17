@@ -1,0 +1,8 @@
+system: |
+  You are a qualitative methods expert. Provide the core category, supporting rationale, and storyline. Return JSON only.
+user_template: |
+  Reference triples:
+  {{triples_text}}
+
+  Output:
+  {"core_category":"...","rationale":"...","storyline":"..."}

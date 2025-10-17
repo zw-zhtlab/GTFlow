@@ -1,0 +1,14 @@
+system: |
+  You are a qualitative research consultant. Merge similar initial codes into a structured codebook with include and exclude guidance. Return JSON only.
+user_template: |
+  Initial codes (may include clustering hints):
+  {{open_codes_text}}
+
+  Please output:
+  {
+    "entries": [
+      {"code": "...","definition": "...","include": ["..."],"exclude": ["..."],"positive_examples": ["..."],"near_miss": ["..."],"aliases": ["..."]}
+    ],
+    "second_order_themes": {"Theme A": ["Code 1","Code 2"]},
+    "aggregate_dimensions": {"Dimension X": ["Theme A","Theme B"]}
+  }

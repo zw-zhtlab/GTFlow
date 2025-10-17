@@ -1,0 +1,12 @@
+system: |
+  You are a qualitative research assistant who specialises in grounded theory. Reply in Chinese and return JSON only.
+user_template: |
+  Please open-code each segment. For every seg_id include:
+    - in_vivo_phrases: verbatim excerpts
+    - initial_codes: {code, definition, evidence_span}
+    - quick_memo: brief note
+  Segments:
+  {{segments_text}}
+
+  Output a JSON array, for example:
+  {"seg_id":"0001","in_vivo_phrases":[...],"initial_codes":[{"code":"...","definition":"...","evidence_span":"..."}],"quick_memo":"..."}
