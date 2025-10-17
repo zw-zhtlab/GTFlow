@@ -1,4 +1,4 @@
-# GTFlow: End-to-end tool for Grounded Theory research**
+# GTFlow: End-to-end tool for Grounded Theory research
 
 GTFlow turns raw qualitative text into theory-building artifacts. It ships with a Streamlit-based UI and a CLI, supports OpenAI‑protocol compatible endpoints, Azure OpenAI, and Anthropic, and tracks token usage and estimated costs.
 
