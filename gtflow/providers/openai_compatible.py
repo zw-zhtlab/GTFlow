@@ -6,12 +6,6 @@ from openai import OpenAI
 from .base import LLMProvider
 
 class OpenAICompatibleProvider(LLMProvider):
-    """Provider for any cloud that adopts the OpenAI protocol.
-
-    - Supports both /v1/chat/completions and /v1/responses (toggle by conf.use_responses_api).
-    - Accepts base_url, api_key, organization, and extra_headers from ProviderConfig.
-    - Gracefully falls back to non-structured output if the target does not support JSON schema.
-    """
     def __init__(self, conf):
         super().__init__(conf)
         base_url = conf.base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -36,8 +30,8 @@ class OpenAICompatibleProvider(LLMProvider):
         model = kwargs.get("model") or self.conf.model
         temperature = kwargs.get("temperature", self.conf.temperature)
         max_tokens = kwargs.get("max_tokens", self.conf.max_tokens)
+        timeout = kwargs.get("timeout")
 
-        # Prefer /responses if requested
         if self.use_responses:
             try:
                 resp = self.client.responses.create(
@@ -47,6 +41,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     temperature=temperature,
                     max_output_tokens=max_tokens,
                     response_format=response_format,
+                    timeout=timeout,
                 )
                 self._extract_and_update_usage(resp)
                 if hasattr(resp, "output_text"):
@@ -56,16 +51,16 @@ class OpenAICompatibleProvider(LLMProvider):
                 except Exception:
                     return str(resp)
             except Exception:
-                # fallback to chat.completions
                 pass
 
-        # Chat Completions path
         kwargs_payload = dict(model=model, messages=messages, temperature=temperature)
         if max_tokens:
             kwargs_payload["max_tokens"] = max_tokens
         if response_format:
             kwargs_payload["response_format"] = response_format
 
+        if timeout is not None:
+            kwargs_payload["timeout"] = timeout
         resp = self.client.chat.completions.create(**kwargs_payload)
         self._extract_and_update_usage(resp)
         return resp.choices[0].message.content
