@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import io
 import os
+import sys
 import tempfile
 import zipfile
+from pathlib import Path
 
 import streamlit as st
+
+_root = Path(__file__).resolve().parents[2]
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
 
 from gtflow.config import AppConfig, ProviderConfig
 from gtflow.models.schemas import AxialTriple, Codebook, OpenCodingItem, Segment
@@ -22,12 +28,31 @@ from gtflow.providers.base import make_provider
 from gtflow.utils.file_io import ensure_dir, write_json
 
 
+_SENSITIVE_HEADER_TOKENS = ("key", "token", "secret", "authorization", "cookie", "credential", "password")
+
+
 def _default_config() -> AppConfig:
     return AppConfig()
 
 
 def _save_config_snippet(conf: AppConfig, dirpath: str) -> None:
-    write_json(os.path.join(dirpath, "config.used.json"), conf.model_dump())
+    data = conf.model_dump(mode="python")
+    provider = data.get("provider")
+    if isinstance(provider, dict):
+        if "api_key" in provider:
+            provider["api_key"] = None
+        headers = provider.get("extra_headers")
+        if isinstance(headers, dict):
+            provider["extra_headers"] = {
+                k: ("***redacted***" if _is_sensitive_header(k) else v)
+                for k, v in headers.items()
+            }
+    write_json(os.path.join(dirpath, "config.used.json"), data)
+
+
+def _is_sensitive_header(name: str) -> bool:
+    lowered = name.lower()
+    return any(token in lowered for token in _SENSITIVE_HEADER_TOKENS)
 
 
 def _usage_box(title: str, usage: dict) -> None:
