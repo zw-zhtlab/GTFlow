@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from pydantic import TypeAdapter
 
@@ -43,4 +43,22 @@ def build_axial(provider: LLMProvider, codebook: Codebook) -> List[AxialTriple]:
     )
     data = try_parse_json(raw)
     adapter = TypeAdapter(List[AxialTriple])
-    return adapter.validate_python(data)
+    normalized = _normalize_axial_payload(data)
+    try:
+        return adapter.validate_python(normalized)
+    except Exception as exc:
+        snippet = raw[:800] if isinstance(raw, str) else str(raw)[:800]
+        raise RuntimeError(
+            f"Axial coding parse failed: {exc}\nModel raw (first 800 chars): {snippet}"
+        )
+
+
+def _normalize_axial_payload(data: Any) -> Any:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("items", "triples", "data", "results", "output"):
+            if isinstance(data.get(key), list):
+                return data[key]
+        return [data]
+    return data
