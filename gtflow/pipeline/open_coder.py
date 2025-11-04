@@ -48,14 +48,34 @@ def _call_with_retry(
     response_format: Any,
     max_retries: int = 3,
     backoff_base: float = 1.5,
+    timeout_sec: int = 60,
 ) -> str:
     err: Exception | None = None
-    for i in range(max_retries):
-        try:
-            return provider.generate_text(messages, response_format=response_format)
-        except Exception as exc:
-            err = exc
-            time.sleep(backoff_base**i)
+    toggled_endpoint = False
+    original_use_responses = getattr(provider, "use_responses", None)
+    try:
+        for i in range(max_retries):
+            try:
+                return provider.generate_text(
+                    messages,
+                    response_format=response_format,
+                    timeout=timeout_sec,
+                )
+            except Exception as exc:
+                err = exc
+                if i == 0:
+                    # first failure: drop structured mode and try /responses endpoint if supported
+                    response_format = None
+                    if hasattr(provider, "use_responses") and provider.use_responses is False:
+                        provider.use_responses = True
+                        toggled_endpoint = True
+                time.sleep(backoff_base**i)
+    finally:
+        if toggled_endpoint and original_use_responses is not None:
+            try:
+                provider.use_responses = original_use_responses
+            except Exception:
+                pass
     raise RuntimeError(f"Open coding request failed after {max_retries} attempts: {err}")
 
 
