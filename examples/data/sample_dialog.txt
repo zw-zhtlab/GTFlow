@@ -1,0 +1,4 @@
+Speaker A: We launched a new feature; early users say it's confusing.
+Speaker B: The flow might be too long—we should simplify steps.
+Speaker A: Drop-off happens at checkout; the copy may be unclear.
+Speaker C: Maybe surface better error hints or add a short guide.

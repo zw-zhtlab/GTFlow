@@ -1,14 +1,15 @@
 
 from __future__ import annotations
-import json, os, pathlib, asyncio, time
+import json, os, pathlib, asyncio, time, itertools
 import typer, yaml
 from rich.table import Table
 from .config import AppConfig
 from .logging import console
 from .utils.file_io import read_text, write_json, write_text, ensure_dir, write_csv, read_json
+from .utils.jsonl_utils import iter_jsonl, count_jsonl
 from .providers.base import make_provider
 from .pipeline.segmenter import segment_dialog, segment_paragraph, segment_line
-from .pipeline.open_coder import run_open_coding
+from .pipeline.open_coder import run_open_coding, run_open_coding_streaming
 from .pipeline.codebook_builder import build_codebook
 from .pipeline.axial_coder import build_axial
 from .pipeline.selective_coder import build_theory
@@ -16,6 +17,7 @@ from .pipeline.gioia_view import to_gioia
 from .pipeline.negatives_scanner import scan_negatives
 from .pipeline.saturation import saturation
 from .pipeline.report_html import emit_html
+from .rate_limiter import TokenBucket
 from .models.schemas import Segment
 from .cost import UsageAccumulator, estimate_cost
 
@@ -32,6 +34,23 @@ def _load_config(config_path: str | None) -> AppConfig:
 
 def _stage_header(name: str):
     console.rule(f"[info]{name}[/info]")
+
+
+def _iter_open_codes(open_json: str, open_jsonl: str):
+    from .models.schemas import OpenCodingItem
+    if os.path.exists(open_json):
+        for rec in read_json(open_json):
+            yield OpenCodingItem.model_validate(rec)
+    elif os.path.exists(open_jsonl):
+        for rec in iter_jsonl(open_jsonl):
+            try:
+                yield OpenCodingItem.model_validate(rec)
+            except Exception:
+                continue
+
+
+def _sample_open_codes(open_json: str, open_jsonl: str, limit: int = 200):
+    return list(itertools.islice(_iter_open_codes(open_json, open_jsonl), limit))
 
 @app.command()
 def segment(
@@ -61,14 +80,20 @@ def run_all(
     conf = _load_config(config_path)
     conf.output.out_dir = out_dir
     ensure_dir(out_dir)
+    rate_limiter = TokenBucket(conf.run.rate_limit_rps) if conf.run.rate_limit_rps else None
 
     run_meta = {"stages": {}, "totals": {}}
     price_in = conf.provider.price_input_per_1k
     price_out = conf.provider.price_output_per_1k
+    output_language = getattr(conf.provider, "output_language", None) or "English"
+
+    segments_count = 0
+    open_codes_count = None
 
     # 1) Segment
     _stage_header("Segment")
     seg_json = os.path.join(out_dir, "segments.json")
+    seg_jsonl = os.path.join(out_dir, "segments.jsonl")
     if not os.path.exists(seg_json) or force:
         text = read_text(input_path)
         strat = conf.run.segmentation_strategy
@@ -79,9 +104,13 @@ def run_all(
         else:
             segs = segment_line(text, conf.run.max_segment_chars)
         write_json(seg_json, [s.model_dump() for s in segs])
+        # also emit jsonl for large runs
+        from .utils.jsonl_utils import write_jsonl
+        write_jsonl(seg_jsonl, (s.model_dump() for s in segs))
     else:
         segs = [Segment.model_validate(x) for x in read_json(seg_json)]
-    console.print(f"[ok] segments: {len(segs)}")
+    segments_count = len(segs)
+    console.print(f"[ok] segments: {segments_count}")
 
     # provider
     provider = make_provider(conf.provider)
@@ -100,21 +129,59 @@ def run_all(
     # 2) Open coding
     _stage_header("Open Coding")
     open_json = os.path.join(out_dir, "open_codes.json")
-    if not os.path.exists(open_json) or force:
-        seg_dicts = [s.model_dump() for s in segs]
+    open_jsonl = os.path.join(out_dir, "open_codes.jsonl")
+    if (not os.path.exists(open_json) and not os.path.exists(open_jsonl)) or force:
+        seg_iter = (s.model_dump() for s in segs)
         before = provider.total_usage()
-        items = run_open_coding(provider, seg_dicts, batch_size=conf.run.batch_size, max_retries=conf.run.retry_max)
-        write_json(open_json, [x.model_dump() for x in items])
+        if conf.run.stream_open_coding or len(segs) >= conf.run.stream_open_coding_threshold:
+            total, sample = run_open_coding_streaming(
+                provider,
+                seg_iter,
+                output_path=open_jsonl,
+                batch_size=conf.run.batch_size,
+                max_prompt_chars=conf.run.max_prompt_chars,
+                max_retries=conf.run.retry_max,
+                timeout_sec=conf.run.timeout_sec,
+                rate_limiter=rate_limiter,
+                sample_limit=200,
+                output_language=output_language,
+            )
+            console.print(f"[ok] open coding (streamed) items: {total}")
+            write_json(open_json, [x.model_dump() for x in sample])
+            open_codes_count = total
+        else:
+            seg_dicts = list(seg_iter)
+            items = run_open_coding(
+                provider,
+                seg_dicts,
+                batch_size=conf.run.batch_size,
+                max_prompt_chars=conf.run.max_prompt_chars,
+                max_retries=conf.run.retry_max,
+                timeout_sec=conf.run.timeout_sec,
+                rate_limiter=rate_limiter,
+                max_concurrency=max(conf.run.concurrent_workers, 1),
+                output_language=output_language,
+            )
+            write_json(open_json, [x.model_dump() for x in items])
+            open_codes_count = len(items)
         run_meta["stages"]["open_coding"] = usage_delta(before)
+        run_meta["stages"]["open_coding"]["items"] = open_codes_count
 
     # 3) Codebook
     _stage_header("Codebook")
     codebook_json = os.path.join(out_dir, "codebook.json")
     if not os.path.exists(codebook_json) or force:
         from .models.schemas import OpenCodingItem
-        items = [OpenCodingItem.model_validate(x) for x in read_json(open_json)]
+        items = _sample_open_codes(open_json, open_jsonl)
         before = provider.total_usage()
-        codebook = build_codebook(provider, items)
+        codebook = build_codebook(
+            provider,
+            items,
+            timeout_sec=conf.run.timeout_sec,
+            rate_limiter=rate_limiter,
+            max_retries=conf.run.retry_max,
+            output_language=output_language,
+        )
         write_json(codebook_json, codebook.model_dump())
         run_meta["stages"]["codebook"] = usage_delta(before)
 
@@ -125,7 +192,14 @@ def run_all(
         from .models.schemas import Codebook
         codebook = Codebook.model_validate(read_json(codebook_json))
         before = provider.total_usage()
-        triples = build_axial(provider, codebook)
+        triples = build_axial(
+            provider,
+            codebook,
+            timeout_sec=conf.run.timeout_sec,
+            rate_limiter=rate_limiter,
+            max_retries=conf.run.retry_max,
+            output_language=output_language,
+        )
         write_json(triples_json, [t.model_dump() for t in triples])
         run_meta["stages"]["axial"] = usage_delta(before)
 
@@ -136,7 +210,14 @@ def run_all(
         from .models.schemas import AxialTriple
         triples = [AxialTriple.model_validate(x) for x in read_json(triples_json)]
         before = provider.total_usage()
-        theory = build_theory(provider, triples)
+        theory = build_theory(
+            provider,
+            triples,
+            timeout_sec=conf.run.timeout_sec,
+            rate_limiter=rate_limiter,
+            max_retries=conf.run.retry_max,
+            output_language=output_language,
+        )
         write_json(theory_json, theory.model_dump())
         write_text(os.path.join(out_dir,"theory.md"), f"# Core Category\n\n{theory.core_category}\n\n## Storyline\n\n{theory.storyline}\n")
         run_meta["stages"]["theory"] = usage_delta(before)
@@ -157,7 +238,15 @@ def run_all(
         tho = read_json(theory_json)
         before = provider.total_usage()
         seg_dicts = [s.model_dump() for s in segs]
-        negs = scan_negatives(provider, seg_dicts, tho.get("storyline",""))
+        negs = scan_negatives(
+            provider,
+            seg_dicts,
+            tho.get("storyline",""),
+            timeout_sec=conf.run.timeout_sec,
+            rate_limiter=rate_limiter,
+            max_retries=conf.run.retry_max,
+            output_language=output_language,
+        )
         write_json(negatives_json, negs)
         run_meta["stages"]["negatives"] = usage_delta(before)
 
@@ -165,8 +254,11 @@ def run_all(
     _stage_header("Saturation")
     saturation_json = os.path.join(out_dir, "saturation.json")
     if not os.path.exists(saturation_json) or force:
-        oc = read_json(open_json)
-        sat = saturation(oc)
+        if os.path.exists(open_jsonl):
+            oc_iter = iter_jsonl(open_jsonl)
+        else:
+            oc_iter = read_json(open_json)
+        sat = saturation(oc_iter)
         write_json(saturation_json, sat)
 
     # 9) HTML Report
@@ -175,10 +267,17 @@ def run_all(
     from .models.schemas import Codebook, AxialTriple, OpenCodingItem
     codebook = Codebook.model_validate(read_json(codebook_json))
     triples = [AxialTriple.model_validate(x) for x in read_json(triples_json)]
-    open_items = [OpenCodingItem.model_validate(x) for x in read_json(open_json)]
+    open_items = [OpenCodingItem.model_validate(x) for x in _sample_open_codes(open_json, open_jsonl, limit=200)]
+    if open_codes_count is None:
+        if os.path.exists(open_jsonl):
+            open_codes_count = count_jsonl(open_jsonl)
+        elif os.path.exists(open_json):
+            open_codes_count = len(read_json(open_json))
+        else:
+            open_codes_count = 0
     stats = {
-        "segments": len(segs),
-        "open_codes": sum(len(i.initial_codes) for i in open_items),
+        "segments": segments_count,
+        "open_codes": open_codes_count,
         "codebook_entries": len(codebook.entries),
         "triples": len(triples),
     }
@@ -211,12 +310,22 @@ def run_all(
 def html_report(out_dir: str = typer.Option("output", "-o")):
     codebook = read_json(os.path.join(out_dir, "codebook.json"))
     triples = read_json(os.path.join(out_dir, "axial_triples.json"))
-    open_items = read_json(os.path.join(out_dir, "open_codes.json"))
+    open_json = os.path.join(out_dir, "open_codes.json")
+    open_jsonl = os.path.join(out_dir, "open_codes.jsonl")
+    if os.path.exists(open_json):
+        open_items = read_json(open_json)
+        open_codes_count = len(open_items)
+    elif os.path.exists(open_jsonl):
+        open_items = list(itertools.islice(iter_jsonl(open_jsonl), 200))
+        open_codes_count = count_jsonl(open_jsonl)
+    else:
+        open_items = []
+        open_codes_count = 0
     segs = read_json(os.path.join(out_dir, "segments.json"))
     from .pipeline.report_html import emit_html
     stats = {
         "segments": len(segs),
-        "open_codes": sum(len(i.get("initial_codes",[])) for i in open_items),
+        "open_codes": open_codes_count,
         "codebook_entries": len(codebook.get("entries",[])),
         "triples": len(triples),
     }

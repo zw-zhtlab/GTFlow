@@ -20,21 +20,52 @@ class AzureOpenAIProvider(LLMProvider):
         self.url = f"{conf.endpoint}/openai/deployments/{conf.deployment}/chat/completions?api-version={conf.api_version}"
         self.headers = {"api-key": conf.api_key, "Content-Type": "application/json"}
 
+    def _content_to_text(self, content: Any) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif hasattr(item, "text"):
+                    try:
+                        parts.append(str(item.text))
+                    except Exception:
+                        pass
+                elif isinstance(item, dict):
+                    txt = item.get("text") or item.get("content") or item.get("data")
+                    if txt:
+                        parts.append(str(txt))
+            return "".join(parts)
+        if hasattr(content, "text"):
+            try:
+                return str(content.text)
+            except Exception:
+                pass
+        return str(content)
+
     def generate_text(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, Any]] = None, **kwargs) -> str:
         payload = {
             "messages": messages,
             "temperature": kwargs.get("temperature", self.conf.temperature),
             "max_tokens": kwargs.get("max_tokens", self.conf.max_tokens),
         }
+        if response_format:
+            payload["response_format"] = response_format
         try:
-            r = requests.post(self.url, headers=self.headers, json=payload, timeout=60)
+            timeout = kwargs.get("timeout")
+            r = requests.post(self.url, headers=self.headers, json=payload, timeout=timeout or 60)
             r.raise_for_status()
             data = r.json()
             usage = data.get("usage", {}) or {}
             prompt = int(usage.get("prompt_tokens", 0) or 0)
             completion = int(usage.get("completion_tokens", 0) or 0)
             self._update_usage(prompt, completion)
-            return data["choices"][0]["message"]["content"]
+            msg = (data.get("choices") or [{}])[0].get("message", {}) if isinstance(data, dict) else {}
+            return self._content_to_text(msg.get("content"))
         except Exception as e:
             self._update_usage(0, 0)
             raise RuntimeError(f"AzureOpenAI request failed: {e}")

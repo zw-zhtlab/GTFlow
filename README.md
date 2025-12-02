@@ -111,6 +111,7 @@ You can control providers and runtime behavior via a YAML file. A minimal exampl
 provider:
   name: openai_compatible          # openai_compatible | openai | azure_openai | anthropic | ollama
   model: gpt-4o-mini               # change as needed
+  output_language: English         # choose output language for model responses
   # api_key: <fill-your-real-key-or-omit>
   base_url: https://api.openai.com/v1
   use_responses_api: false         # true to try /v1/responses first
@@ -128,6 +129,9 @@ run:
   rate_limit_rps: 2.0
   retry_max: 3
   timeout_sec: 60
+  max_prompt_chars: 200000         # soft ceiling per LLM call; sized for 128k context by default
+  stream_open_coding: false        # set true to stream open-coding batches to JSONL instead of holding all in memory
+  stream_open_coding_threshold: 2000  # segments >= this will stream even if the flag is false
 
 output:
   out_dir: output
@@ -172,6 +176,15 @@ What `run-all` produces under `output/`:
 - `saturation.json`
 - `report.html`
 - `run_meta.json` (token usage by stage and estimated cost)
+- For large runs, JSONL streams are also emitted: `segments.jsonl`, `open_codes.jsonl` (full results), plus `open_codes.json` keeps a sample for quick inspection.
+
+---
+
+## Handling Large Inputs
+- Keep segment size small (`run.max_segment_chars` 400–800) so each model call stays within context.
+- Enable streaming for long corpora (`run.stream_open_coding: true` or lower the `run.stream_open_coding_threshold`) to write open codes directly to `open_codes.jsonl` instead of keeping all in memory.
+- Cap prompt size with `run.max_prompt_chars` (default 200k chars, tuned for 128k-context models). Lower it if you target smaller-context models; raise only if your provider guarantees a larger window.
+- JSONL artifacts (`segments.jsonl`, `open_codes.jsonl`) let you resume or post-process without re-running the whole pipeline.
 
 ---
 

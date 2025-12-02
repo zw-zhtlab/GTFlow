@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 from typing import List, Dict, Any
-from jinja2 import Template
+from jinja2 import Environment, Template
 from ..utils.file_io import write_text
 
 HTML = """
@@ -61,6 +61,24 @@ flowchart TD
 </html>
 """
 
+_ENV = Environment(autoescape=True)
+_TEMPLATE: Template = _ENV.from_string(HTML)
+
 def emit_html(out_path: str, stats: Dict[str, Any], gioia: Dict[str, Any], triples: List[Dict[str,str]], open_codes: List[Any], codebook: Any):
-    html = Template(HTML).render(stats=stats, gioia=gioia, triples=triples, open_codes=open_codes, codebook=codebook)
+    sanitized_triples = [_sanitize_mermaid_fields(t) for t in triples]
+    html = _TEMPLATE.render(stats=stats, gioia=gioia, triples=sanitized_triples, open_codes=open_codes, codebook=codebook)
     write_text(out_path, html)
+
+
+def _sanitize_mermaid_fields(triple: Dict[str, Any]) -> Dict[str, Any]:
+    def _clean(val: Any) -> str:
+        if not isinstance(val, str):
+            return ""
+        return val.replace('"', '\\"').replace("\n", " ").replace("\r", " ").strip()
+
+    return {
+        **triple,
+        "condition": _clean(triple.get("condition", "")),
+        "action": _clean(triple.get("action", "")),
+        "result": _clean(triple.get("result", "")),
+    }

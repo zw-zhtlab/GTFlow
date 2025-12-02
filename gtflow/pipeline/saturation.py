@@ -1,8 +1,8 @@
 
 from __future__ import annotations
-from typing import List, Dict, Tuple
+from typing import Iterable, List, Dict, Tuple
 
-def saturation(open_codes: List[Dict], window: int = 20, threshold: float = 0.05) -> Dict:
+def saturation(open_codes: Iterable[Dict], window: int = 20, threshold: float = 0.05) -> Dict:
     seen = set()
     new_counts = []
     for item in open_codes:

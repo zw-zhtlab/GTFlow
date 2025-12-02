@@ -1,8 +1,10 @@
 import re
 from typing import List, Tuple
 
-_DIALOG_LINE = re.compile(r"^([^:]+):(.+)$")
-_SPLIT_PUNCTUATION = (".", "!", "?", ";")
+# Match both ASCII and full-width colons so Chinese speaker labels are captured.
+_DIALOG_LINE = re.compile(r"^([^:：]+)[:：](.+)$")
+# Prefer natural splits on common sentence-ending punctuation (ASCII + Chinese).
+_SPLIT_PUNCTUATION = (".", "!", "?", ";", "。", "！", "？", "；")
 
 
 def split_dialog(text: str, max_chars: int) -> List[Tuple[str, str]]:
@@ -46,6 +48,8 @@ def split_lines(text: str, max_chars: int) -> List[str]:
 
 def chunk_split(s: str, max_chars: int) -> List[str]:
     s = s.strip()
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
     if len(s) <= max_chars:
         return [s]
     out: List[str] = []

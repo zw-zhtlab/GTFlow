@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple, Optional
 
 from pydantic import TypeAdapter
 
 from ..models.schemas import Codebook, OpenCodingItem
 from ..providers.base import LLMProvider
 from ..utils.json_utils import try_parse_json
+from .retry_utils import call_with_retry
 
 
-def _summarize_codes(open_items: List[OpenCodingItem]) -> Tuple[str, int]:
+def _summarize_codes(open_items: Iterable[OpenCodingItem]) -> Tuple[str, int]:
     counts: Dict[str, int] = {}
     descriptions: Dict[str, str] = {}
     for item in open_items:
@@ -33,7 +34,7 @@ def _summarize_codes(open_items: List[OpenCodingItem]) -> Tuple[str, int]:
     return "\n".join(lines), len(counts)
 
 
-def build_prompt(open_items: List[OpenCodingItem]) -> List[Dict[str, str]]:
+def build_prompt(open_items: Iterable[OpenCodingItem], output_language: str = "English") -> List[Dict[str, str]]:
     code_summary, unique_codes = _summarize_codes(open_items)
     header = f"Unique initial codes collected: {unique_codes}"
     schema_hint = (
@@ -60,7 +61,8 @@ def build_prompt(open_items: List[OpenCodingItem]) -> List[Dict[str, str]]:
             "content": (
                 "You are a qualitative research consultant. Review the supplied open-coding results, "
                 "merge semantically similar initial codes, and produce a structured codebook "
-                "(include/exclude guidance, examples, higher-order groupings). Return JSON only."
+                "(include/exclude guidance, examples, higher-order groupings). "
+                f"Respond in {output_language} and return JSON only."
             ),
         },
         {
@@ -76,14 +78,21 @@ def build_prompt(open_items: List[OpenCodingItem]) -> List[Dict[str, str]]:
 
 
 def build_codebook(
-    provider: LLMProvider, open_items: List[OpenCodingItem]
+    provider: LLMProvider,
+    open_items: Iterable[OpenCodingItem],
+    timeout_sec: int = 60,
+    rate_limiter: Optional[Any] = None,
+    max_retries: int = 3,
+    output_language: str = "English",
 ) -> Codebook:
-    messages = build_prompt(open_items)
-    raw = provider.generate_text(
+    messages = build_prompt(open_items, output_language=output_language)
+    raw = call_with_retry(
+        provider,
         messages,
-        response_format={"type": "json_object"}
-        if getattr(provider.conf, "structured", True)
-        else None,
+        response_format={"type": "json_object"} if getattr(provider.conf, "structured", True) else None,
+        timeout_sec=timeout_sec,
+        rate_limiter=rate_limiter,
+        max_retries=max_retries,
     )
     adapter = TypeAdapter(Codebook)
 

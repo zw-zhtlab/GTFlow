@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from ..config import ProviderConfig
+import threading
 
 @dataclass
 class UsageStats:
@@ -14,28 +15,37 @@ class LLMProvider:
         self.conf = conf
         self._last_usage = UsageStats()
         self._total_usage = UsageStats()
+        self._usage_lock = threading.Lock()
 
     def _update_usage(self, input_tokens: int, output_tokens: int):
-        self._last_usage = UsageStats(int(input_tokens or 0), int(output_tokens or 0))
-        self._total_usage.input_tokens += int(input_tokens or 0)
-        self._total_usage.output_tokens += int(output_tokens or 0)
+        in_tok = int(input_tokens or 0)
+        out_tok = int(output_tokens or 0)
+        with self._usage_lock:
+            self._last_usage = UsageStats(in_tok, out_tok)
+            self._total_usage.input_tokens += in_tok
+            self._total_usage.output_tokens += out_tok
 
     def last_usage(self) -> Dict[str, int]:
+        with self._usage_lock:
+            last = UsageStats(self._last_usage.input_tokens, self._last_usage.output_tokens)
         return {
-            "input_tokens": self._last_usage.input_tokens,
-            "output_tokens": self._last_usage.output_tokens,
-            "total_tokens": self._last_usage.input_tokens + self._last_usage.output_tokens,
+            "input_tokens": last.input_tokens,
+            "output_tokens": last.output_tokens,
+            "total_tokens": last.input_tokens + last.output_tokens,
         }
 
     def total_usage(self) -> Dict[str, int]:
+        with self._usage_lock:
+            total = UsageStats(self._total_usage.input_tokens, self._total_usage.output_tokens)
         return {
-            "input_tokens": self._total_usage.input_tokens,
-            "output_tokens": self._total_usage.output_tokens,
-            "total_tokens": self._total_usage.input_tokens + self._total_usage.output_tokens,
+            "input_tokens": total.input_tokens,
+            "output_tokens": total.output_tokens,
+            "total_tokens": total.input_tokens + total.output_tokens,
         }
 
     def reset_usage_totals(self):
-        self._total_usage = UsageStats()
+        with self._usage_lock:
+            self._total_usage = UsageStats()
 
     def generate_text(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, Any]] = None, **kwargs) -> str:
         raise NotImplementedError

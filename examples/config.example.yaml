@@ -1,0 +1,29 @@
+provider:
+  name: openai_compatible  # openai_compatible | openai | azure_openai | anthropic | ollama
+  model: gpt-4o-mini
+  output_language: English  # e.g., English | Chinese | Japanese | French
+  base_url: https://api.openai.com/v1
+  api_key: null            # leave null to read OPENAI_API_KEY from env
+  use_responses_api: false
+  structured: true
+  max_tokens: 1024
+  temperature: 0.2
+  price_input_per_1k: 0.002
+  price_output_per_1k: 0.006
+
+run:
+  segmentation_strategy: dialog   # dialog | paragraph | line
+  max_segment_chars: 800
+  batch_size: 10
+  concurrent_workers: 4
+  rate_limit_rps: 2.0
+  retry_max: 3
+  timeout_sec: 60
+  max_prompt_chars: 200000
+  stream_open_coding: false
+  stream_open_coding_threshold: 2000
+
+output:
+  out_dir: output
+  save_graphviz: true
+  log_file: analysis.log

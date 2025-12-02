@@ -7,6 +7,7 @@ class ProviderConfig(BaseModel):
     name: Literal["openai_compatible","openai","azure_openai","anthropic","ollama"] = "openai_compatible"
     model: str = "gpt-4o-mini"
     api_key: Optional[str] = None
+    output_language: str = "English"
     # OpenAI-compatible options
     base_url: Optional[str] = None
     organization: Optional[str] = None
@@ -33,6 +34,11 @@ class RunConfig(BaseModel):
     retry_max: int = 3
     timeout_sec: int = 60
     batch_size: int = 10
+    # Soft ceiling for the assembled prompt (characters) to stay within model context.
+    # Sized for 128k-context models by default; reduce if you target smaller contexts.
+    max_prompt_chars: int = 200000
+    stream_open_coding: bool = False
+    stream_open_coding_threshold: int = 2000
 
 class OutputConfig(BaseModel):
     out_dir: str = "output"

@@ -4,13 +4,17 @@ import threading
 
 class TokenBucket:
     def __init__(self, rate_per_sec: float, capacity: float = None):
+        # ensure capacity can satisfy a 1-token request even when rate_per_sec < 1
         self.rate = max(0.1, float(rate_per_sec))
-        self.capacity = capacity or self.rate
+        base_capacity = self.rate if capacity is None else float(capacity)
+        self.capacity = max(1.0, base_capacity)
         self.tokens = self.capacity
         self.timestamp = time.monotonic()
         self.lock = threading.Lock()
 
     def acquire(self, amount: float = 1.0):
+        if amount > self.capacity:
+            raise ValueError(f"Requested amount {amount} exceeds capacity {self.capacity}")
         while True:
             with self.lock:
                 now = time.monotonic()

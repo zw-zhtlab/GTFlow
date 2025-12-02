@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import zipfile
+import shutil
 from pathlib import Path
 
 import streamlit as st
@@ -26,6 +27,7 @@ from gtflow.pipeline.segmenter import segment_dialog, segment_line, segment_para
 from gtflow.pipeline.selective_coder import build_theory
 from gtflow.providers.base import make_provider
 from gtflow.utils.file_io import ensure_dir, write_json
+from gtflow.rate_limiter import TokenBucket
 
 
 _SENSITIVE_HEADER_TOKENS = ("key", "token", "secret", "authorization", "cookie", "credential", "password")
@@ -96,6 +98,23 @@ def main():
             value=conf_provider.max_tokens,
             step=64,
         )
+        language_options = ["English", "Chinese", "Japanese", "French", "Spanish", "German", "Korean"]
+        lang_index = language_options.index(conf_provider.output_language) if conf_provider.output_language in language_options else 0
+        output_language = st.selectbox("Output language", language_options, index=lang_index)
+        price_in = st.number_input(
+            "Price /1k input tokens ($)",
+            min_value=0.0,
+            value=float(conf_provider.price_input_per_1k),
+            step=0.0001,
+            format="%.6f",
+        )
+        price_out = st.number_input(
+            "Price /1k output tokens ($)",
+            min_value=0.0,
+            value=float(conf_provider.price_output_per_1k),
+            step=0.0001,
+            format="%.6f",
+        )
         st.markdown("---")
         if name == "openai_compatible":
             base_url = st.text_input(
@@ -147,6 +166,14 @@ def main():
             value=st.session_state["conf"].run.batch_size,
             step=1,
         )
+        max_prompt_chars = st.number_input(
+            "Max prompt chars per batch",
+            min_value=2000,
+            max_value=500000,
+            value=st.session_state["conf"].run.max_prompt_chars,
+            step=2000,
+            help="Soft ceiling to keep requests within model context; sized for 128k context by default.",
+        )
         retry_max = st.slider(
             "Retry attempts",
             min_value=0,
@@ -159,9 +186,13 @@ def main():
         st.session_state["conf"].provider.model = model
         st.session_state["conf"].provider.temperature = float(temperature)
         st.session_state["conf"].provider.max_tokens = int(max_tokens)
+        st.session_state["conf"].provider.output_language = output_language
+        st.session_state["conf"].provider.price_input_per_1k = float(price_in)
+        st.session_state["conf"].provider.price_output_per_1k = float(price_out)
         st.session_state["conf"].run.segmentation_strategy = seg_strategy
         st.session_state["conf"].run.max_segment_chars = int(max_chars)
         st.session_state["conf"].run.batch_size = int(batch_size)
+        st.session_state["conf"].run.max_prompt_chars = int(max_prompt_chars)
         st.session_state["conf"].run.retry_max = int(retry_max)
 
         if name == "openai_compatible":
@@ -201,6 +232,7 @@ def main():
 
     provider = make_provider(conf.provider)
     provider.reset_usage_totals()
+    rate_limiter = TokenBucket(conf.run.rate_limit_rps) if conf.run.rate_limit_rps else None
 
     progress = st.progress(0, text="Open coding in progress...")
 
@@ -209,20 +241,54 @@ def main():
         provider,
         segment_dicts,
         batch_size=conf.run.batch_size,
+        max_prompt_chars=conf.run.max_prompt_chars,
         max_retries=conf.run.retry_max,
+        timeout_sec=conf.run.timeout_sec,
+        rate_limiter=rate_limiter,
+        max_concurrency=max(conf.run.concurrent_workers, 1),
+        output_language=conf.provider.output_language,
     )
     progress.progress(20, text="Open coding complete.")
 
-    codebook = build_codebook(provider, items)
+    codebook = build_codebook(
+        provider,
+        items,
+        timeout_sec=conf.run.timeout_sec,
+        rate_limiter=rate_limiter,
+        max_retries=conf.run.retry_max,
+        output_language=conf.provider.output_language,
+    )
     progress.progress(40, text="Codebook complete.")
 
-    triples = build_axial(provider, codebook)
+    triples = build_axial(
+        provider,
+        codebook,
+        timeout_sec=conf.run.timeout_sec,
+        rate_limiter=rate_limiter,
+        max_retries=conf.run.retry_max,
+        output_language=conf.provider.output_language,
+    )
     progress.progress(60, text="Axial coding complete.")
 
-    theory = build_theory(provider, triples)
+    theory = build_theory(
+        provider,
+        triples,
+        timeout_sec=conf.run.timeout_sec,
+        rate_limiter=rate_limiter,
+        max_retries=conf.run.retry_max,
+        output_language=conf.provider.output_language,
+    )
     progress.progress(75, text="Selective coding complete.")
 
-    negatives = scan_negatives(provider, segment_dicts, theory.storyline)
+    negatives = scan_negatives(
+        provider,
+        segment_dicts,
+        theory.storyline,
+        timeout_sec=conf.run.timeout_sec,
+        rate_limiter=rate_limiter,
+        max_retries=conf.run.retry_max,
+        output_language=conf.provider.output_language,
+    )
     sat = saturation([item.model_dump() for item in items])
     progress.progress(85, text="Negative cases and saturation calculated.")
 
@@ -269,9 +335,12 @@ def main():
     write_json(os.path.join(tmpdir, "run_meta.json"), run_meta)
 
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zipped:
-        for filename in os.listdir(tmpdir):
-            zipped.write(os.path.join(tmpdir, filename), arcname=filename)
+    try:
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zipped:
+            for filename in os.listdir(tmpdir):
+                zipped.write(os.path.join(tmpdir, filename), arcname=filename)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
     progress.progress(100, text="All done.")
 
     st.success("Pipeline completed.")
