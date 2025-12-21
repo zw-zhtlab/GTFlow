@@ -160,7 +160,8 @@ provider:
 `gtflow` exposes focused commands:
 
 ```bash
-# 1) Segment a source file into analysis units
+# 1) Segment an input file into analysis units
+#    Supported inputs: .txt/.md (raw text), .jsonl, .csv
 gtflow segment   -i data/interview_1.txt   -o output   --strategy dialog   --max-segment-chars 800
 
 # 2) Run the entire pipeline using a YAML config

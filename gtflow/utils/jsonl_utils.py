@@ -18,7 +18,7 @@ def append_jsonl(path: str, records: Iterable[Any]) -> None:
             f.write("\n")
 
 def iter_jsonl(path: str) -> Iterator[Any]:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -41,7 +41,7 @@ def iter_jsonl_batches(path: str, batch_size: int) -> Iterator[List[Any]]:
 
 def count_jsonl(path: str) -> int:
     count = 0
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         for line in f:
             if line.strip():
                 count += 1

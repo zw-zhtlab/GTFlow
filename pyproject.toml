@@ -19,12 +19,13 @@ dependencies = [
   "python-slugify>=8.0.4",
   "streamlit>=1.37.1",
   "requests>=2.32.3",
-  "pyyaml>=6.0.2"
+  "pyyaml>=6.0.2",
+  "json-repair>=0.54.0"
 ]
 
 [project.scripts]
 gtflow = "gtflow.cli:app"
-gtflow-ui = "gtflow.gui.app:main"
+gtflow-ui = "gtflow.gui.launcher:main"
 
 [tool.setuptools.packages.find]
 where = [""]

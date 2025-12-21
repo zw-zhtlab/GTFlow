@@ -1,6 +1,7 @@
 
 from __future__ import annotations
-import json, os, pathlib, asyncio, time, itertools
+import csv, json, os, pathlib, asyncio, time, itertools
+from typing import Optional
 import typer, yaml
 from rich.table import Table
 from .config import AppConfig
@@ -23,14 +24,154 @@ from .cost import UsageAccumulator, estimate_cost
 
 app = typer.Typer(help="GTFlow grounded theory pipeline")
 
-def _load_config(config_path: str | None) -> AppConfig:
-    if config_path and os.path.exists(config_path):
-        if config_path.endswith(".json"):
-            data = json.loads(read_text(config_path))
-        else:
-            data = yaml.safe_load(read_text(config_path))
-        return AppConfig.model_validate(data)
-    return AppConfig()
+def _load_segments_from_structured_input(
+    input_path: str, strategy: str, max_segment_chars: int
+) -> list[Segment]:
+    if not (input_path.lower().endswith(".jsonl") or input_path.lower().endswith(".csv")):
+        return []
+
+    from .utils import text_utils
+
+    segments: list[Segment] = []
+    seen_ids: set[str] = set()
+
+    def _unique_seg_id(candidate: str) -> str:
+        base = candidate or "seg"
+        seg_id = base
+        counter = 2
+        while seg_id in seen_ids:
+            seg_id = f"{base}-{counter}"
+            counter += 1
+        seen_ids.add(seg_id)
+        return seg_id
+
+    def _coerce_meta(meta_value: object) -> dict[str, str]:
+        if meta_value is None:
+            return {}
+        if isinstance(meta_value, dict):
+            return {str(k): str(v) for k, v in meta_value.items() if k is not None and v is not None}
+        if isinstance(meta_value, str):
+            try:
+                parsed = json.loads(meta_value)
+            except Exception:
+                return {"meta": meta_value}
+            if isinstance(parsed, dict):
+                return {str(k): str(v) for k, v in parsed.items() if k is not None and v is not None}
+            return {"meta": meta_value}
+        return {"meta": str(meta_value)}
+
+    def _consume_records(record_iter) -> None:
+        for idx, rec in enumerate(record_iter, start=1):
+            if not isinstance(rec, dict):
+                continue
+
+            raw_text = rec.get("text") or rec.get("content") or rec.get("utterance")
+            if raw_text is None:
+                continue
+            text = str(raw_text).strip()
+            if not text:
+                continue
+
+            base_id = rec.get("seg_id") or rec.get("id") or rec.get("ID") or rec.get("Id")
+            base_id_str = str(base_id).strip() if base_id is not None else ""
+            speaker = rec.get("speaker") or rec.get("role")
+            speaker_str = (
+                str(speaker).strip()
+                if speaker is not None and str(speaker).strip()
+                else None
+            )
+
+            meta = _coerce_meta(rec.get("meta"))
+            for k, v in rec.items():
+                if k in ("seg_id", "id", "ID", "Id", "text", "content", "utterance", "speaker", "role", "meta"):
+                    continue
+                if v is None:
+                    continue
+                meta[str(k)] = str(v)
+            if base_id_str:
+                meta.setdefault("source_id", base_id_str)
+            meta.setdefault("source_row", str(idx))
+
+            chunks: list[tuple[Optional[str], str]] = []
+            if strategy == "dialog" and speaker_str is None:
+                chunks = text_utils.split_dialog(text, max_segment_chars)
+            elif strategy == "paragraph":
+                chunks = [
+                    (speaker_str, c)
+                    for c in text_utils.split_paragraph(text, max_segment_chars)
+                ]
+            elif strategy == "line":
+                chunks = [
+                    (speaker_str, c)
+                    for c in text_utils.split_lines(text, max_segment_chars)
+                ]
+            else:
+                chunks = [
+                    (speaker_str, c)
+                    for c in text_utils.chunk_split(text, max_segment_chars)
+                ]
+
+            if not chunks:
+                continue
+
+            for part_idx, (part_speaker, part_text) in enumerate(chunks, start=1):
+                part_text = str(part_text).strip()
+                if not part_text:
+                    continue
+                if base_id_str:
+                    candidate = (
+                        base_id_str
+                        if len(chunks) == 1
+                        else f"{base_id_str}-{part_idx:02d}"
+                    )
+                else:
+                    candidate = (
+                        f"{idx:04d}"
+                        if len(chunks) == 1
+                        else f"{idx:04d}-{part_idx:02d}"
+                    )
+                seg_id = _unique_seg_id(candidate)
+                segments.append(
+                    Segment(
+                        seg_id=seg_id,
+                        text=part_text,
+                        speaker=part_speaker or speaker_str,
+                        meta=dict(meta),
+                    )
+                )
+
+    if input_path.lower().endswith(".jsonl"):
+        _consume_records(r for r in iter_jsonl(input_path) if isinstance(r, dict))
+    else:
+        with open(input_path, "r", encoding="utf-8-sig", newline="") as f:
+            _consume_records(dict(r) for r in csv.DictReader(f))
+
+    return segments
+
+
+def _load_segments(input_path: str, strategy: str, max_segment_chars: int) -> list[Segment]:
+    structured = _load_segments_from_structured_input(input_path, strategy, max_segment_chars)
+    if structured:
+        return structured
+
+    text = read_text(input_path)
+    if strategy == "dialog":
+        return segment_dialog(text, max_segment_chars)
+    if strategy == "paragraph":
+        return segment_paragraph(text, max_segment_chars)
+    return segment_line(text, max_segment_chars)
+
+
+def _load_config(config_path: Optional[str]) -> AppConfig:
+    if not config_path:
+        return AppConfig()
+    if not os.path.exists(config_path):
+        raise typer.BadParameter(f"Config file not found: {config_path}")
+    if config_path.endswith(".json"):
+        data = json.loads(read_text(config_path))
+    else:
+        data = yaml.safe_load(read_text(config_path))
+    return AppConfig.model_validate(data)
 
 def _stage_header(name: str):
     console.rule(f"[info]{name}[/info]")
@@ -38,15 +179,15 @@ def _stage_header(name: str):
 
 def _iter_open_codes(open_json: str, open_jsonl: str):
     from .models.schemas import OpenCodingItem
-    if os.path.exists(open_json):
-        for rec in read_json(open_json):
-            yield OpenCodingItem.model_validate(rec)
-    elif os.path.exists(open_jsonl):
+    if os.path.exists(open_jsonl):
         for rec in iter_jsonl(open_jsonl):
             try:
                 yield OpenCodingItem.model_validate(rec)
             except Exception:
                 continue
+    elif os.path.exists(open_json):
+        for rec in read_json(open_json):
+            yield OpenCodingItem.model_validate(rec)
 
 
 def _sample_open_codes(open_json: str, open_jsonl: str, limit: int = 200):
@@ -60,14 +201,10 @@ def segment(
     max_segment_chars: int = typer.Option(800, help="Maximum characters per segment")
 ):
     ensure_dir(out_dir)
-    text = read_text(input_path)
-    if strategy == "dialog":
-        segs = segment_dialog(text, max_segment_chars)
-    elif strategy == "paragraph":
-        segs = segment_paragraph(text, max_segment_chars)
-    else:
-        segs = segment_line(text, max_segment_chars)
+    segs = _load_segments(input_path, strategy, max_segment_chars)
     write_json(os.path.join(out_dir, "segments.json"), [s.model_dump() for s in segs])
+    from .utils.jsonl_utils import write_jsonl
+    write_jsonl(os.path.join(out_dir, "segments.jsonl"), (s.model_dump() for s in segs))
     console.print(f"[ok] Segmented {len(segs)} segments -> {out_dir}/segments.json")
 
 @app.command()
@@ -95,14 +232,8 @@ def run_all(
     seg_json = os.path.join(out_dir, "segments.json")
     seg_jsonl = os.path.join(out_dir, "segments.jsonl")
     if not os.path.exists(seg_json) or force:
-        text = read_text(input_path)
         strat = conf.run.segmentation_strategy
-        if strat == "dialog":
-            segs = segment_dialog(text, conf.run.max_segment_chars)
-        elif strat == "paragraph":
-            segs = segment_paragraph(text, conf.run.max_segment_chars)
-        else:
-            segs = segment_line(text, conf.run.max_segment_chars)
+        segs = _load_segments(input_path, strat, conf.run.max_segment_chars)
         write_json(seg_json, [s.model_dump() for s in segs])
         # also emit jsonl for large runs
         from .utils.jsonl_utils import write_jsonl
@@ -171,8 +302,7 @@ def run_all(
     _stage_header("Codebook")
     codebook_json = os.path.join(out_dir, "codebook.json")
     if not os.path.exists(codebook_json) or force:
-        from .models.schemas import OpenCodingItem
-        items = _sample_open_codes(open_json, open_jsonl)
+        items = _iter_open_codes(open_json, open_jsonl)
         before = provider.total_usage()
         codebook = build_codebook(
             provider,
@@ -333,3 +463,9 @@ def html_report(out_dir: str = typer.Option("output", "-o")):
     from .models.schemas import Codebook
     emit_html(os.path.join(out_dir,"report.html"), stats, to_gioia(Codebook.model_validate(codebook)), triples, open_items, Codebook.model_validate(codebook))
     console.print(f"[ok] Wrote {out_dir}/report.html")
+
+
+@app.command()
+def report(out_dir: str = typer.Option("output", "-o")):
+    """Alias for `html-report`."""
+    html_report(out_dir=out_dir)

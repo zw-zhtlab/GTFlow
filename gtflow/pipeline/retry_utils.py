@@ -22,31 +22,24 @@ def call_with_retry(
     timeout_sec: int = 60,
     rate_limiter: Optional[Any] = None,
 ) -> str:
-    err: Exception | None = None
-    toggled_endpoint = False
-    original_use_responses = getattr(provider, "use_responses", None)
-    try:
-        for attempt in range(max_retries):
-            try:
-                if rate_limiter:
-                    rate_limiter.acquire()
-                return provider.generate_text(
-                    messages,
-                    response_format=response_format,
-                    timeout=timeout_sec,
-                )
-            except Exception as exc:
-                err = exc
-                if response_format is not None and _should_relax_format(exc):
-                    response_format = None
-                if hasattr(provider, "use_responses") and provider.use_responses is False and _should_relax_format(exc):
-                        provider.use_responses = True
-                        toggled_endpoint = True
-                time.sleep(backoff_base**attempt)
-    finally:
-        if toggled_endpoint and original_use_responses is not None:
-            try:
-                provider.use_responses = original_use_responses
-            except Exception:
-                pass
+    err: Optional[Exception] = None
+    force_responses = False
+
+    for attempt in range(max_retries):
+        try:
+            if rate_limiter:
+                rate_limiter.acquire()
+            return provider.generate_text(
+                messages,
+                response_format=response_format,
+                timeout=timeout_sec,
+                force_responses=force_responses,
+            )
+        except Exception as exc:
+            err = exc
+            if response_format is not None and _should_relax_format(exc):
+                response_format = None
+            if hasattr(provider, "use_responses") and getattr(provider, "use_responses") is False and _should_relax_format(exc):
+                force_responses = True
+            time.sleep(backoff_base**attempt)
     raise RuntimeError(f"LLM request failed after {max_retries} attempts: {err}")

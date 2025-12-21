@@ -75,12 +75,14 @@ class OpenAICompatibleProvider(LLMProvider):
         return out
 
     def generate_text(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, Any]] = None, **kwargs) -> str:
+        force_responses = bool(kwargs.pop("force_responses", False))
+        force_chat = bool(kwargs.pop("force_chat", False))
         model = kwargs.get("model") or self.conf.model
         temperature = kwargs.get("temperature", self.conf.temperature)
         max_tokens = kwargs.get("max_tokens", self.conf.max_tokens)
         timeout = kwargs.get("timeout")
 
-        if self.use_responses:
+        if (self.use_responses or force_responses) and not force_chat:
             try:
                 resp = self.client.responses.create(
                     model=model,

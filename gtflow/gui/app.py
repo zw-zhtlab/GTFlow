@@ -306,7 +306,8 @@ def main():
         os.path.join(tmpdir, "report.html"),
         {
             "segments": len(segments),
-            "open_codes": sum(len(item.initial_codes) for item in items),
+            "open_codes": len(items),
+            "initial_codes": sum(len(item.initial_codes) for item in items),
             "codebook_entries": len(codebook.entries),
             "triples": len(triples),
         },

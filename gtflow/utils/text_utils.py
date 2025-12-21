@@ -1,5 +1,5 @@
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 # Match both ASCII and full-width colons so Chinese speaker labels are captured.
 _DIALOG_LINE = re.compile(r"^([^:：]+)[:：](.+)$")
@@ -7,15 +7,15 @@ _DIALOG_LINE = re.compile(r"^([^:：]+)[:：](.+)$")
 _SPLIT_PUNCTUATION = (".", "!", "?", ";", "。", "！", "？", "；")
 
 
-def split_dialog(text: str, max_chars: int) -> List[Tuple[str, str]]:
+def split_dialog(text: str, max_chars: int) -> List[Tuple[Optional[str], str]]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    pairs: List[Tuple[str, str]] = []
-    speaker = None
+    pairs: List[Tuple[Optional[str], str]] = []
+    speaker: Optional[str] = None
     buf: List[str] = []
     for line in lines:
         match = _DIALOG_LINE.match(line)
         if match:
-            if buf and speaker:
+            if buf:
                 chunk = " ".join(buf).strip()
                 for part in chunk_split(chunk, max_chars):
                     pairs.append((speaker, part))
@@ -23,7 +23,7 @@ def split_dialog(text: str, max_chars: int) -> List[Tuple[str, str]]:
             buf = [match.group(2).strip()]
         else:
             buf.append(line)
-    if buf and speaker:
+    if buf:
         chunk = " ".join(buf).strip()
         for part in chunk_split(chunk, max_chars):
             pairs.append((speaker, part))
@@ -56,12 +56,14 @@ def chunk_split(s: str, max_chars: int) -> List[str]:
     start = 0
     while start < len(s):
         end = min(len(s), start + max_chars)
-        cut = -1
+        best_idx = -1
+        best_len = 0
         for punct in _SPLIT_PUNCTUATION:
-            cut = s.rfind(punct, start, end)
-            if cut != -1:
-                cut += len(punct)
-                break
+            idx = s.rfind(punct, start, end)
+            if idx != -1 and idx > best_idx:
+                best_idx = idx
+                best_len = len(punct)
+        cut = best_idx + best_len if best_idx != -1 else -1
         if cut == -1 or cut <= start:
             cut = end
         out.append(s[start:cut].strip())
