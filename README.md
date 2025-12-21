@@ -235,7 +235,7 @@ The dashboard lets you:
 
 ## Reproducibility, Usage, and Cost
 - Each run writes a structured set of artifacts to the output directory so you can rerun, diff, and audit results.
-- The CLI prints a **Token Usage by Stage** table and writes `run_meta.json` with input tokens, output tokens, totals, and an estimated cost using your configured `price_input_per_1k` and `price_output_per_1k`.
+- The CLI prints a Token Usage by Stage table and writes `run_meta.json` with input tokens, output tokens, totals, and an estimated cost using your configured `price_input_per_1k` and `price_output_per_1k`.
 - For ethics and privacy, ensure consent for any interview or sensitive text and follow your IRB or organizational guidelines.
 
 ---
