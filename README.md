@@ -112,7 +112,6 @@ provider:
   name: openai_compatible          # openai_compatible | openai | azure_openai | anthropic | ollama
   model: gpt-4o-mini               # change as needed
   output_language: English         # choose output language for model responses
-  # api_key: <fill-your-real-key-or-omit>
   base_url: https://api.openai.com/v1
   use_responses_api: false         # true to try /v1/responses first
   structured: true                 # request JSON when supported
@@ -143,6 +142,16 @@ Notes:
 - **OpenAI‑compatible**: if `api_key` is omitted in YAML, `OPENAI_API_KEY` is used automatically. `OPENAI_BASE_URL` overrides `base_url` at runtime.
 - **Azure OpenAI**: set `endpoint`, `deployment`, `api_version`, and `api_key` in YAML. The CLI does not read Azure env vars automatically.
 - **Anthropic**: set `api_key` in YAML or export `ANTHROPIC_API_KEY` and wire it in your own wrapper before creating the config.
+
+### Output language control
+
+Set `provider.output_language` (default: `English`) to control the language used in **LLM-generated** text across the pipeline (codes, definitions, memos, theory/storyline, negatives, and the HTML report). This does **not** translate your source text or change the CLI/UI language; verbatim excerpts (e.g. in-vivo phrases) stay in the original language. JSON field names remain in English for schema stability.
+
+Example:
+```yaml
+provider:
+  output_language: Chinese  # e.g., English | Chinese | Japanese | French
+```
 
 ---
 
