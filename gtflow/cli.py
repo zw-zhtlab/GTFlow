@@ -442,12 +442,12 @@ def html_report(out_dir: str = typer.Option("output", "-o")):
     triples = read_json(os.path.join(out_dir, "axial_triples.json"))
     open_json = os.path.join(out_dir, "open_codes.json")
     open_jsonl = os.path.join(out_dir, "open_codes.jsonl")
-    if os.path.exists(open_json):
-        open_items = read_json(open_json)
-        open_codes_count = len(open_items)
-    elif os.path.exists(open_jsonl):
+    if os.path.exists(open_jsonl):
         open_items = list(itertools.islice(iter_jsonl(open_jsonl), 200))
         open_codes_count = count_jsonl(open_jsonl)
+    elif os.path.exists(open_json):
+        open_items = read_json(open_json)
+        open_codes_count = len(open_items)
     else:
         open_items = []
         open_codes_count = 0

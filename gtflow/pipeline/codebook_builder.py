@@ -206,13 +206,13 @@ def _normalize_mapping(value: Any, key_field: Tuple[str, ...], value_field: Tupl
 def _ensure_list(value: Any) -> List[str]:
     if value is None:
         return []
+    if isinstance(value, bool):
+        return []
     if isinstance(value, (list, tuple, set)):
         return [str(v).strip() for v in value if isinstance(v, (str, int, float)) and str(v).strip()]
     if isinstance(value, (str, int, float)):
         text = str(value).strip()
         return [text] if text else []
-    if isinstance(value, bool):
-        return []
     if isinstance(value, dict):
         return [str(k).strip() for k, v in value.items() if v] or []
     return []

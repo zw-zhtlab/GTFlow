@@ -74,6 +74,33 @@ class OpenAICompatibleProvider(LLMProvider):
             out.append({"role": role, "content": content})
         return out
 
+    def _response_format_to_text_config(self, response_format: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Convert chat-completions response_format to Responses API text.format."""
+        if not response_format or not isinstance(response_format, dict):
+            return None
+        fmt_type = response_format.get("type")
+        if fmt_type == "json_object":
+            return {"format": {"type": "json_object"}}
+        if fmt_type == "json_schema":
+            schema_block = response_format.get("json_schema")
+            if not isinstance(schema_block, dict):
+                return None
+            name = schema_block.get("name")
+            schema = schema_block.get("schema")
+            if not isinstance(name, str) or not isinstance(schema, dict):
+                return None
+            text_format: Dict[str, Any] = {
+                "type": "json_schema",
+                "name": name,
+                "schema": schema,
+            }
+            if "strict" in schema_block:
+                text_format["strict"] = bool(schema_block.get("strict"))
+            if isinstance(schema_block.get("description"), str):
+                text_format["description"] = schema_block.get("description")
+            return {"format": text_format}
+        return None
+
     def generate_text(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, Any]] = None, **kwargs) -> str:
         force_responses = bool(kwargs.pop("force_responses", False))
         force_chat = bool(kwargs.pop("force_chat", False))
@@ -81,17 +108,22 @@ class OpenAICompatibleProvider(LLMProvider):
         temperature = kwargs.get("temperature", self.conf.temperature)
         max_tokens = kwargs.get("max_tokens", self.conf.max_tokens)
         timeout = kwargs.get("timeout")
+        responses_exc: Optional[Exception] = None
 
         if (self.use_responses or force_responses) and not force_chat:
             try:
-                resp = self.client.responses.create(
-                    model=model,
-                    input=self._messages_to_responses_input(messages),
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                    response_format=response_format,
-                    timeout=timeout,
-                )
+                payload: Dict[str, Any] = {
+                    "model": model,
+                    "input": self._messages_to_responses_input(messages),
+                    "temperature": temperature,
+                    "max_output_tokens": max_tokens,
+                }
+                text_config = self._response_format_to_text_config(response_format)
+                if text_config is not None:
+                    payload["text"] = text_config
+                if timeout is not None:
+                    payload["timeout"] = timeout
+                resp = self.client.responses.create(**payload)
                 self._extract_and_update_usage(resp)
                 if hasattr(resp, "output_text"):
                     return resp.output_text
@@ -102,8 +134,8 @@ class OpenAICompatibleProvider(LLMProvider):
                         return self._content_to_text(resp.choices[0].message.content)
                     except Exception:
                         return str(resp)
-            except Exception:
-                pass
+            except Exception as exc:
+                responses_exc = exc
 
         kwargs_payload = dict(model=model, messages=messages, temperature=temperature)
         if max_tokens:
@@ -113,6 +145,13 @@ class OpenAICompatibleProvider(LLMProvider):
 
         if timeout is not None:
             kwargs_payload["timeout"] = timeout
-        resp = self.client.chat.completions.create(**kwargs_payload)
+        try:
+            resp = self.client.chat.completions.create(**kwargs_payload)
+        except Exception as chat_exc:
+            if responses_exc is not None:
+                raise RuntimeError(
+                    "OpenAI-compatible request failed on both /v1/responses and /v1/chat/completions"
+                ) from chat_exc
+            raise
         self._extract_and_update_usage(resp)
         return self._content_to_text(resp.choices[0].message.content)

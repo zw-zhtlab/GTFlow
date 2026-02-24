@@ -16,7 +16,7 @@ def write_text(p: str, s: str):
         f.write(s)
 
 def read_json(p: str) -> Any:
-    with open(p, "r", encoding="utf-8") as f:
+    with open(p, "r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 def write_json(p: str, obj: Any, pretty: bool=True):

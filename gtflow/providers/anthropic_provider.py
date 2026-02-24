@@ -18,12 +18,18 @@ class AnthropicProvider(LLMProvider):
                 sys = m["content"]
             elif m["role"] in ("user", "assistant"):
                 converted.append({"role": m["role"], "content": m["content"]})
+        payload = {
+            "model": kwargs.get("model") or self.conf.model,
+            "system": sys,
+            "max_tokens": kwargs.get("max_tokens", self.conf.max_tokens),
+            "temperature": kwargs.get("temperature", self.conf.temperature),
+            "messages": converted,
+        }
+        timeout = kwargs.get("timeout")
+        if timeout is not None:
+            payload["timeout"] = timeout
         resp = self.client.messages.create(
-            model=kwargs.get("model") or self.conf.model,
-            system=sys,
-            max_tokens=kwargs.get("max_tokens", self.conf.max_tokens),
-            temperature=kwargs.get("temperature", self.conf.temperature),
-            messages=converted
+            **payload
         )
         try:
             u = resp.usage

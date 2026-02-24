@@ -176,6 +176,9 @@ def run_open_coding_streaming(
 
     adapter = TypeAdapter(List[OpenCodingItem])
     ensure_dir(os.path.dirname(output_path) or ".")
+    # Start a fresh stream for each run; callers rely on reruns/--force to overwrite artifacts.
+    with open(output_path, "w", encoding="utf-8"):
+        pass
     total = 0
     sample: List[OpenCodingItem] = []
 
