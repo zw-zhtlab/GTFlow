@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GTFlow</title>
+    <link rel="icon" type="image/png" href="/static/gtflow-icon.png" />
+    <link rel="apple-touch-icon" href="/static/gtflow-icon.png" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <img class="brand-mark" src="/static/gtflow-icon.png" alt="" aria-hidden="true" />
+          <div>
+            <div class="brand-title">GTFlow</div>
+            <div class="brand-subtitle" data-i18n="brand.subtitle">Grounded theory workspace</div>
+          </div>
+        </div>
+
+        <details class="side-section side-details" open>
+          <summary class="section-label" data-i18n="section.connection">Connection</summary>
+          <label data-i18n="label.provider">Provider</label>
+          <select id="providerName">
+            <option value="openai_compatible">OpenAI compatible</option>
+            <option value="azure_openai">Azure OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+          <label data-i18n="label.model">Model</label>
+          <input id="model" value="gpt-4o-mini" />
+          <label data-i18n="label.apiKey">API key</label>
+          <input id="apiKey" type="password" placeholder="Use env var or paste key" data-i18n-placeholder="placeholder.apiKey" />
+          <div id="openaiFields">
+            <label data-i18n="label.baseUrl">Base URL</label>
+            <input id="baseUrl" value="https://api.openai.com/v1" />
+            <label data-i18n="label.organization">Organization</label>
+            <input id="organization" placeholder="Optional org id" data-i18n-placeholder="placeholder.organization" />
+            <label class="check-field">
+              <input id="useResponses" type="checkbox" />
+              <span data-i18n="label.useResponses">Use Responses API when supported</span>
+            </label>
+          </div>
+          <div id="azureFields" class="hidden">
+            <label data-i18n="label.endpoint">Endpoint</label>
+            <input id="azureEndpoint" placeholder="https://resource.openai.azure.com" data-i18n-placeholder="placeholder.azureEndpoint" />
+            <label data-i18n="label.deployment">Deployment</label>
+            <input id="azureDeployment" placeholder="deployment name" data-i18n-placeholder="placeholder.azureDeployment" />
+            <label data-i18n="label.apiVersion">API version</label>
+            <input id="apiVersion" value="2024-02-15-preview" />
+          </div>
+          <label data-i18n="label.outputLanguage">Language</label>
+          <select id="outputLanguage">
+            <option value="English">English</option>
+            <option value="Chinese">简体中文</option>
+            <option value="Traditional Chinese">繁體中文</option>
+            <option value="Japanese">日本語</option>
+            <option value="French">Français</option>
+            <option value="Spanish">Español</option>
+            <option value="German">Deutsch</option>
+            <option value="Korean">한국어</option>
+          </select>
+          <details>
+            <summary data-i18n="section.generation">Generation</summary>
+            <div class="field-row">
+              <div>
+                <label data-i18n="label.temperature">Temperature</label>
+                <input id="temperature" type="number" value="0.2" min="0" max="2" step="0.1" />
+              </div>
+              <div>
+                <label data-i18n="label.maxTokens">Max tokens</label>
+                <input id="maxTokens" type="number" value="1024" min="1" />
+              </div>
+            </div>
+            <label class="check-field">
+              <input id="structuredOutput" type="checkbox" checked />
+              <span data-i18n="label.structuredOutput">Structured JSON output</span>
+            </label>
+          </details>
+          <details>
+            <summary data-i18n="section.costModel">Cost model</summary>
+            <div class="field-row">
+              <div>
+                <label data-i18n="label.priceIn">Input $/1k</label>
+                <input id="priceIn" type="number" min="0" step="0.0001" placeholder="Optional" data-i18n-placeholder="placeholder.optional" />
+              </div>
+              <div>
+                <label data-i18n="label.priceOut">Output $/1k</label>
+                <input id="priceOut" type="number" min="0" step="0.0001" placeholder="Optional" data-i18n-placeholder="placeholder.optional" />
+              </div>
+            </div>
+          </details>
+        </details>
+
+        <details class="side-section side-details">
+          <summary class="section-label" data-i18n="section.runSetup">Run setup</summary>
+          <label data-i18n="label.segmentation">Segmentation</label>
+          <select id="segmentationStrategy">
+            <option value="dialog" data-i18n="option.dialog">Dialog</option>
+            <option value="paragraph" data-i18n="option.paragraph">Paragraph</option>
+            <option value="line" data-i18n="option.line">Line</option>
+          </select>
+          <div class="field-row">
+            <div>
+              <label data-i18n="label.segmentSize">Segment size</label>
+              <input id="maxSegmentChars" type="number" value="800" min="100" />
+            </div>
+            <div>
+              <label data-i18n="label.batch">Batch</label>
+              <input id="batchSize" type="number" value="10" min="1" />
+            </div>
+          </div>
+          <details>
+            <summary data-i18n="section.throughput">Throughput</summary>
+            <div class="field-row">
+              <div>
+                <label data-i18n="label.workers">Workers</label>
+                <input id="concurrentWorkers" type="number" value="6" min="1" />
+              </div>
+              <div>
+                <label data-i18n="label.rateSec">Rate/sec</label>
+                <input id="rateLimitRps" type="number" value="2" min="0" step="0.1" />
+              </div>
+            </div>
+            <div class="field-row">
+              <div>
+                <label data-i18n="label.timeoutSec">Timeout sec</label>
+                <input id="timeoutSec" type="number" value="60" min="1" />
+              </div>
+              <div>
+                <label data-i18n="label.streamAt">Stream at</label>
+                <input id="streamThreshold" type="number" value="2000" min="1" />
+              </div>
+            </div>
+            <label class="check-field">
+              <input id="streamOpenCoding" type="checkbox" />
+              <span data-i18n="label.streamOpenCoding">Stream open coding for large runs</span>
+            </label>
+          </details>
+          <details>
+            <summary data-i18n="section.advancedLimits">Advanced limits</summary>
+            <label data-i18n="label.promptChars">Prompt chars</label>
+            <input id="maxPromptChars" type="number" value="200000" min="2000" />
+            <label data-i18n="label.retryAttempts">Retry attempts</label>
+            <input id="retryMax" type="number" value="3" min="0" max="5" />
+          </details>
+        </details>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="topbar-copy">
+            <div class="eyebrow" data-i18n="top.eyebrow">GTFlow studio</div>
+            <h1 data-i18n="top.title">Qualitative evidence into theory.</h1>
+          </div>
+        </header>
+
+        <section class="stage-strip" aria-label="Analysis workflow" data-i18n-aria-label="aria.workflow">
+          <div class="stage active"><span>01</span><b data-i18n="stage.source">Source</b><small data-i18n="stage.sourceSub">Paste or upload</small></div>
+          <div class="stage" id="providerStep"><span>02</span><b data-i18n="stage.provider">Provider</b><small data-i18n="stage.providerSub">Model and key</small></div>
+          <div class="stage" id="runStep"><span>03</span><b data-i18n="stage.run">Run</b><small data-i18n="stage.runSub">Pipeline</small></div>
+          <div class="stage"><span>04</span><b data-i18n="stage.review">Review</b><small data-i18n="stage.reviewSub">Gioia and contrasts</small></div>
+          <div class="stage"><span>05</span><b data-i18n="stage.export">Export</b><small data-i18n="stage.exportSub">ZIP bundle</small></div>
+        </section>
+
+        <section class="source-grid">
+          <div id="sourcePanel" class="panel source-panel">
+            <div class="panel-head">
+              <div>
+                <h2 data-i18n="source.title">Source</h2>
+                <p data-i18n="source.copy">Paste text or load .txt, .md, .csv, or .jsonl.</p>
+              </div>
+              <div class="button-row">
+                <button id="clearText" class="ghost" data-i18n="button.clear">Clear</button>
+              </div>
+            </div>
+            <div id="dropZone" class="drop-zone" role="button" tabindex="0" aria-label="Choose or drop a source file" aria-describedby="fileStatus" data-i18n-aria-label="aria.dropZone">
+              <input id="fileInput" type="file" accept=".txt,.md,.csv,.jsonl,text/plain,text/markdown,application/json" />
+              <div class="drop-mark" aria-hidden="true"></div>
+              <div>
+                <b data-i18n="source.dropTitle">Choose or drop source</b>
+                <span id="fileStatus" aria-live="polite" data-i18n="source.fileStatus">Text stays editable after loading.</span>
+              </div>
+              <button id="chooseFile" class="secondary" type="button" data-i18n="button.choose">Choose</button>
+            </div>
+            <div id="dropOverlay" class="drop-overlay" aria-hidden="true">
+              <div>
+                <b data-i18n="source.dropOverlayTitle">Drop file to load</b>
+                <span data-i18n="source.dropOverlayCopy">.txt, .md, .csv, or .jsonl</span>
+              </div>
+            </div>
+            <textarea id="inputText" placeholder="Paste interview excerpts, field notes, or uploaded file content here.&#10;&#10;Participant A: ...&#10;Participant B: ..." data-i18n-placeholder="placeholder.inputText"></textarea>
+            <div class="runbar">
+              <button id="runButton" class="primary" disabled data-i18n="button.run">Run analysis</button>
+              <div id="runHelp" class="hint" aria-live="polite" data-i18n="runHelp.initial">Add source text and provider settings to begin.</div>
+            </div>
+          </div>
+
+          <div class="panel preview-panel">
+            <div class="panel-head compact">
+              <div>
+                <h2 data-i18n="preview.title">Preview</h2>
+                <p data-i18n="preview.copy">Segments and readiness update as you work.</p>
+              </div>
+            </div>
+            <div class="metric-grid">
+              <div class="metric"><span data-i18n="metric.segments">Segments</span><b id="metricSegments">0</b></div>
+              <div class="metric"><span data-i18n="metric.characters">Characters</span><b id="metricChars">0</b></div>
+              <div class="metric"><span data-i18n="metric.avgChars">Avg chars</span><b id="metricAvg">0</b></div>
+            </div>
+            <div class="readiness-list" aria-label="Readiness checklist" data-i18n-aria-label="aria.readiness">
+              <div id="inputCheck" class="check-item"><span></span><div><b data-i18n="stage.source">Source</b><small data-i18n="check.sourcePending">Paste or upload source text.</small></div></div>
+              <div id="providerCheck" class="check-item"><span></span><div><b data-i18n="stage.provider">Provider</b><small data-i18n="check.providerPending">Add model and API settings.</small></div></div>
+              <div id="runCheck" class="check-item"><span></span><div><b data-i18n="stage.run">Run</b><small data-i18n="check.runPending">Waiting for a complete setup.</small></div></div>
+            </div>
+            <div id="previewList" class="preview-list empty" data-i18n="preview.empty">No segments yet.</div>
+          </div>
+        </section>
+
+        <section id="progressPanel" class="panel progress-panel hidden">
+          <div class="panel-head compact">
+            <div>
+              <h2 id="progressTitle" data-i18n="progress.running">Running analysis</h2>
+              <p id="progressCopy" aria-live="polite" data-i18n="progress.runningCopy">This can take a few minutes depending on provider latency.</p>
+            </div>
+          </div>
+          <div class="progress-track"><div id="progressBar"></div></div>
+        </section>
+
+        <section id="resultsPanel" class="results hidden">
+          <div class="results-head">
+            <div>
+              <div class="eyebrow" data-i18n="results.eyebrow">Analysis output</div>
+              <h2 id="coreCategory" data-i18n="results.coreCategory">Core category</h2>
+              <p id="storyline"></p>
+            </div>
+            <button id="downloadZip" class="primary" data-i18n="button.downloadZip">Download ZIP</button>
+          </div>
+
+          <div id="statCards" class="metric-grid wide"></div>
+
+          <nav class="tabs" role="tablist" aria-label="Result views" data-i18n-aria-label="aria.resultViews">
+            <button class="tab active" data-tab="overview" role="tab" aria-selected="true" data-i18n="tab.overview">Overview</button>
+            <button class="tab" data-tab="gioia" role="tab" aria-selected="false" data-i18n="tab.gioia">Gioia</button>
+            <button class="tab" data-tab="contrasts" role="tab" aria-selected="false" data-i18n="tab.contrasts">Contrasts</button>
+            <button class="tab" data-tab="negatives" role="tab" aria-selected="false" data-i18n="tab.negatives">Negatives</button>
+            <button class="tab" data-tab="saturation" role="tab" aria-selected="false" data-i18n="tab.saturation">Saturation</button>
+            <button class="tab" data-tab="data" role="tab" aria-selected="false" data-i18n="tab.data">Data</button>
+          </nav>
+
+          <div id="tab-overview" class="tab-panel active" role="tabpanel"></div>
+          <div id="tab-gioia" class="tab-panel" role="tabpanel"></div>
+          <div id="tab-contrasts" class="tab-panel" role="tabpanel"></div>
+          <div id="tab-negatives" class="tab-panel" role="tabpanel"></div>
+          <div id="tab-saturation" class="tab-panel" role="tabpanel"></div>
+          <div id="tab-data" class="tab-panel" role="tabpanel"></div>
+        </section>
+      </main>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

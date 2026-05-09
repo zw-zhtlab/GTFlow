@@ -51,6 +51,7 @@ def build_theory(
         timeout_sec=timeout_sec,
         rate_limiter=rate_limiter,
         max_retries=max_retries,
+        operation_name="Selective coding request",
     )
     data = try_parse_json(raw)
     adapter = TypeAdapter(Theory)

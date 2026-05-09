@@ -43,6 +43,7 @@ def scan_negatives(
             timeout_sec=timeout_sec,
             rate_limiter=rate_limiter,
             max_retries=max_retries,
+            operation_name="Negative case request",
         )
         data = try_parse_json(raw)
         if isinstance(data, dict) and "items" in data:

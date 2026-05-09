@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
+import os
 import requests
 from .base import LLMProvider
 
@@ -15,10 +16,14 @@ class AzureOpenAIProvider(LLMProvider):
     """
     def __init__(self, conf):
         super().__init__(conf)
-        if not conf.endpoint or not conf.deployment or not conf.api_key:
+        endpoint = conf.endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
+        deployment = conf.deployment or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+        api_version = conf.api_version or os.getenv("AZURE_OPENAI_API_VERSION")
+        api_key = conf.api_key or os.getenv("AZURE_OPENAI_API_KEY")
+        if not endpoint or not deployment or not api_key:
             raise ValueError("AzureOpenAI requires endpoint, deployment and api_key.")
-        self.url = f"{conf.endpoint}/openai/deployments/{conf.deployment}/chat/completions?api-version={conf.api_version}"
-        self.headers = {"api-key": conf.api_key, "Content-Type": "application/json"}
+        self.url = f"{endpoint.rstrip('/')}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        self.headers = {"api-key": api_key, "Content-Type": "application/json"}
 
     def _content_to_text(self, content: Any) -> str:
         if content is None:

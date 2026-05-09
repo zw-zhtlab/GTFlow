@@ -13,6 +13,30 @@ def _should_relax_format(exc: Exception) -> bool:
     return any(token in msg for token in ("response_format", "schema", "json", "bad request", "400"))
 
 
+def _is_context_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "context length",
+            "maximum context length",
+            "max context length",
+            "too many tokens",
+            "tokens exceed",
+            "too long",
+            "overloaded input",
+            "length limit",
+        )
+    )
+
+
+def _attempt_count(max_retries: int) -> int:
+    try:
+        return max(1, int(max_retries))
+    except Exception:
+        return 1
+
+
 def call_with_retry(
     provider: LLMProvider,
     messages: List[Dict[str, str]],
@@ -21,11 +45,13 @@ def call_with_retry(
     backoff_base: float = 1.5,
     timeout_sec: int = 60,
     rate_limiter: Optional[Any] = None,
+    operation_name: str = "LLM request",
 ) -> str:
     err: Optional[Exception] = None
     force_responses = False
+    attempts = _attempt_count(max_retries)
 
-    for attempt in range(max_retries):
+    for attempt in range(attempts):
         try:
             if rate_limiter:
                 rate_limiter.acquire()
@@ -41,5 +67,8 @@ def call_with_retry(
                 response_format = None
             if hasattr(provider, "use_responses") and getattr(provider, "use_responses") is False and _should_relax_format(exc):
                 force_responses = True
-            time.sleep(backoff_base**attempt)
-    raise RuntimeError(f"LLM request failed after {max_retries} attempts: {err}")
+            if _is_context_error(exc):
+                break
+            if attempt < attempts - 1:
+                time.sleep(backoff_base**attempt)
+    raise RuntimeError(f"{operation_name} failed after {attempts} attempts: {err}")

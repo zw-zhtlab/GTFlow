@@ -93,26 +93,20 @@ def build_codebook(
         timeout_sec=timeout_sec,
         rate_limiter=rate_limiter,
         max_retries=max_retries,
+        operation_name="Codebook request",
     )
     adapter = TypeAdapter(Codebook)
-
     try:
-        data = try_parse_json(raw)
-        normalized = _normalize_codebook_payload(data)
-        return adapter.validate_python(normalized)
-    except Exception as exc:
-        try:
-            data = _normalize_codebook_payload(raw if isinstance(raw, dict) else try_parse_json(raw))
-            return adapter.validate_python(data)
-        except Exception:
-            pass
-    try:
-        data = _normalize_codebook_payload(raw)
-        return adapter.validate_python(data)
+        return _parse_codebook_response(raw, adapter)
     except Exception as exc:
         raise RuntimeError(
             f"Codebook parse failed: {exc}\nModel raw (first 800 chars): {raw[:800]}"
         )
+
+
+def _parse_codebook_response(raw: Any, adapter: TypeAdapter[Codebook]) -> Codebook:
+    data = try_parse_json(raw) if isinstance(raw, str) else raw
+    return adapter.validate_python(_normalize_codebook_payload(data))
 
 
 def _normalize_codebook_payload(data: Any) -> Dict[str, Any]:

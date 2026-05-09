@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 import os
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -12,30 +11,7 @@ from ..models.schemas import OpenCodingItem
 from ..providers.base import LLMProvider
 from ..utils.json_utils import try_parse_json
 from ..utils.jsonl_utils import append_jsonl
-
-
-def _should_relax_format(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    if any(token in msg for token in ("rate limit", "429", "timeout", "temporarily unavailable")):
-        return False
-    return any(token in msg for token in ("response_format", "schema", "json", "bad request", "400"))
-
-
-def _is_context_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(
-        token in msg
-        for token in (
-            "context length",
-            "maximum context length",
-            "max context length",
-            "too many tokens",
-            "tokens exceed",
-            "too long",
-            "overloaded input",
-            "length limit",
-        )
-    )
+from .retry_utils import call_with_retry
 
 
 def build_prompt(segments: List[Dict[str, str]], output_language: str = "English") -> List[Dict[str, str]]:
@@ -67,41 +43,6 @@ def build_prompt(segments: List[Dict[str, str]], output_language: str = "English
             ),
         },
     ]
-
-
-def _call_with_retry(
-    provider: LLMProvider,
-    messages: List[Dict[str, str]],
-    response_format: Any,
-    max_retries: int = 3,
-    backoff_base: float = 1.5,
-    timeout_sec: int = 60,
-    rate_limiter: Optional[Any] = None,
-) -> str:
-    err: Optional[Exception] = None
-    force_responses = False
-
-    for i in range(max_retries):
-        try:
-            if rate_limiter:
-                rate_limiter.acquire()
-            return provider.generate_text(
-                messages,
-                response_format=response_format,
-                timeout=timeout_sec,
-                force_responses=force_responses,
-            )
-        except Exception as exc:
-            err = exc
-            if response_format is not None and _should_relax_format(exc):
-                response_format = None
-            if hasattr(provider, "use_responses") and getattr(provider, "use_responses") is False and _should_relax_format(exc):
-                force_responses = True
-            # If the request is already too long, retrying with the same payload only wastes time.
-            if _is_context_error(exc):
-                break
-            time.sleep(backoff_base**i)
-    raise RuntimeError(f"Open coding request failed after {max_retries} attempts: {err}")
 
 
 def run_open_coding(
@@ -717,13 +658,14 @@ def _run_single_request(
         if getattr(provider.conf, "structured", True)
         else None
     )
-    raw = _call_with_retry(
+    raw = call_with_retry(
         provider,
         messages,
         response_format=response_format,
         max_retries=max_retries,
         timeout_sec=timeout_sec,
         rate_limiter=rate_limiter,
+        operation_name="Open coding request",
     )
     try:
         return _parse_items(raw, adapter)

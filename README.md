@@ -1,66 +1,89 @@
-# GTFlow: End-to-end tool for Grounded Theory research
+# GTFlow
 
-GTFlow turns raw qualitative text into theory-building artifacts. It ships with a Streamlit-based UI and a CLI, supports OpenAI‑protocol compatible endpoints, Azure OpenAI, and Anthropic, and tracks token usage and estimated costs.
+GTFlow is a local research workspace for grounded theory analysis. It turns interviews, field notes, and structured qualitative datasets into segments, initial codes, a codebook, Gioia structures, axial CAR triples, a core category and storyline, negative-case evidence, saturation metrics, participant contrasts, and shareable reports.
 
----
+GTFlow includes a browser UI and a CLI. The browser UI is a lightweight local web app built with static HTML/CSS/JS and the Python pipeline.
 
-## Table of Contents
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [CLI Usage](#cli-usage)
-- [UI Usage](#ui-usage)
-- [Inputs and Outputs](#inputs-and-outputs)
-- [Reproducibility, Usage, and Cost](#reproducibility-usage-and-cost)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
+## Highlights
 
----
+- End-to-end grounded theory pipeline: segmentation, open coding, codebook building, Gioia alignment, axial coding, selective coding, negative cases, saturation, analytics, and report generation.
+- Local web UI for interactive analysis, file upload, preview, batch runs, Gioia editing, result review, and ZIP export.
+- CLI for reproducible scripted runs and project automation.
+- Provider support for OpenAI-compatible APIs, Azure OpenAI, Anthropic, OpenAI, and Ollama-style `/v1` endpoints.
+- Structured inputs: `.txt`, `.md`, `.csv`, and `.jsonl`.
+- Large-run support with JSONL streaming for open coding.
+- Project utilities for comparing and merging GTFlow output directories.
+- Configurable HTML reports with methods, results, and appendix sections.
 
-## Features
-- **End-to-end pipeline**: Segmentation, Open coding, Codebook building with Gioia view, Axial coding with CAR triples, Selective coding and storyline, Negative case scan, Saturation check, and Report generation.
-- **Two interfaces**: Streamlit UI for interactive work and a CLI for scripted, reproducible runs.
-- **Provider compatibility**: OpenAI‑protocol compatible, Azure OpenAI, and Anthropic. Gateways are supported if they expose an OpenAI‑compatible API.
-- **Structured output first**: Prompts prefer JSON with robust parsing and graceful fallbacks.
-- **Reproducibility utilities**: Run directory with intermediate artifacts, token usage and cost estimation, and a one‑command report.
+## Install
 
----
+GTFlow requires Python 3.9+.
 
-## Quick Start
+From the repository root:
 
-### 1) Install
-> Python **3.9+** is required.
-
-From PyPI (if published):
 ```bash
-pip install -U gtflow
-# or in an isolated tool environment
-pipx install gtflow
-```
-
-From source:
-```bash
-git clone https://github.com/your-org/your-repo.git
-cd your-repo
 pip install -e .
 ```
 
-### 2) Configure provider credentials
-Choose one path below.
+Graphviz enables graph output in reports.
 
-**OpenAI‑compatible** (OpenAI, compatible gateways, or Ollama’s /v1):
+## Quick Start
+
+### Web UI
+
 ```bash
-# minimally set your key (and optionally a custom base URL)
-export OPENAI_API_KEY=sk-...
-# for self-hosted or gateways
-export OPENAI_BASE_URL=https://your-endpoint/v1
-# optional organization header
+gtflow-ui
+```
+
+Open the printed local URL in your browser. The default port is `8501`; GTFlow automatically selects the next available port when `8501` is busy.
+
+The UI workflow:
+
+1. Configure provider, model, API key, generation settings, and run limits.
+2. Paste source text or upload `.txt`, `.md`, `.csv`, or `.jsonl`.
+3. Review segmentation preview and readiness.
+4. Run analysis.
+5. Review overview, Gioia alignment, contrasts, negative cases, saturation, and raw data.
+6. Download the ZIP bundle with artifacts and the HTML report.
+
+### CLI
+
+```bash
+gtflow run-all -i examples/data/sample_dialog.txt -c examples/config.example.yaml -o output --force
+gtflow report -o output
+```
+
+Open `output/report.html` after the run finishes.
+
+## Provider Setup
+
+### OpenAI-Compatible APIs
+
+Use this path for OpenAI, SiliconFlow, local gateways, and services that expose an OpenAI-compatible `/v1` API.
+
+```bash
+export OPENAI_API_KEY=YOUR_OPENAI_API_KEY
+export OPENAI_BASE_URL=https://api.openai.com/v1
 export OPENAI_ORG_ID=org_...
 ```
 
-**Azure OpenAI**:
+SiliconFlow example:
+
+```bash
+export OPENAI_API_KEY=YOUR_OPENAI_API_KEY
+export OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+```
+
+Then set the model in the UI or config, for example:
+
+```yaml
+provider:
+  name: openai_compatible
+  model: deepseek-ai/DeepSeek-V4-Flash
+```
+
+### Azure OpenAI
+
 ```bash
 export AZURE_OPENAI_API_KEY=...
 export AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.openai.azure.com
@@ -68,69 +91,41 @@ export AZURE_OPENAI_DEPLOYMENT=YOUR-DEPLOYMENT
 export AZURE_OPENAI_API_VERSION=2024-02-15-preview
 ```
 
-**Anthropic**:
+### Anthropic
+
 ```bash
 export ANTHROPIC_API_KEY=...
 ```
 
-> Tip: when using the YAML config below, either put real values or omit the `api_key` field. Avoid literal placeholders like `${OPENAI_API_KEY}` in YAML because they will be treated as a string rather than expanded.
-
-### 3) Run the UI or the pipeline
-
-**UI (recommended for first run)**
-```bash
-gtflow-ui
-```
-Follow the left sidebar to set provider and run parameters, upload or paste your text, and export artifacts.
-
-**One‑command pipeline (CLI)**
-```bash
-# Example data and config may live under examples/
-gtflow run-all -i examples/data/sample_dialog.txt -c examples/config.example.yaml -o output
-gtflow report -o output
-# Open output/report.html in your browser
-```
-
----
-
-## Installation
-- Python **3.9+**
-- Linux, macOS, or Windows
-- Optional: Graphviz installed system‑wide if you plan to generate graph files
-
-Dependencies are automatically installed via `pip`. See `pyproject.toml` or `requirements.txt` for versions.
-
----
-
 ## Configuration
 
-You can control providers and runtime behavior via a YAML file. A minimal example:
+Create a YAML config for CLI runs and reusable defaults.
 
 ```yaml
-# config.yaml
 provider:
-  name: openai_compatible          # openai_compatible | openai | azure_openai | anthropic | ollama
-  model: gpt-4o-mini               # change as needed
-  output_language: English         # choose output language for model responses
+  name: openai_compatible
+  model: gpt-4o-mini
+  output_language: English
   base_url: https://api.openai.com/v1
-  use_responses_api: false         # true to try /v1/responses first
-  structured: true                 # request JSON when supported
+  organization:
+  use_responses_api: false
+  structured: true
   max_tokens: 1024
   temperature: 0.2
-  price_input_per_1k: 0.002
-  price_output_per_1k: 0.006
+  price_input_per_1k:
+  price_output_per_1k:
 
 run:
-  segmentation_strategy: dialog    # dialog | paragraph | line
+  segmentation_strategy: dialog
   max_segment_chars: 800
   batch_size: 10
   concurrent_workers: 6
   rate_limit_rps: 2.0
   retry_max: 3
   timeout_sec: 60
-  max_prompt_chars: 200000         # soft ceiling per LLM call; sized for 128k context by default
-  stream_open_coding: false        # set true to stream open-coding batches to JSONL instead of holding all in memory
-  stream_open_coding_threshold: 2000  # segments >= this will stream even if the flag is false
+  max_prompt_chars: 200000
+  stream_open_coding: false
+  stream_open_coding_threshold: 2000
 
 output:
   out_dir: output
@@ -138,125 +133,154 @@ output:
   log_file: analysis.log
 ```
 
-Notes:
-- **OpenAI‑compatible**: if `api_key` is omitted in YAML, `OPENAI_API_KEY` is used automatically. `OPENAI_BASE_URL` overrides `base_url` at runtime.
-- **Azure OpenAI**: set `endpoint`, `deployment`, `api_version`, and `api_key` in YAML. The CLI does not read Azure env vars automatically.
-- **Anthropic**: set `api_key` in YAML or export `ANTHROPIC_API_KEY` and wire it in your own wrapper before creating the config.
+`provider.output_language` controls LLM-generated codes, memos, definitions, theory text, negative-case summaries, and report prose. Source excerpts stay in their original language. JSON field names stay stable in English.
 
-### Output language control
+## Input Formats
 
-Set `provider.output_language` (default: `English`) to control the language used in **LLM-generated** text across the pipeline (codes, definitions, memos, theory/storyline, negatives, and the HTML report). This does **not** translate your source text or change the CLI/UI language; verbatim excerpts (e.g. in-vivo phrases) stay in the original language. JSON field names remain in English for schema stability.
+### Plain Text
 
-Example:
-```yaml
-provider:
-  output_language: Chinese  # e.g., English | Chinese | Japanese | French
+Use `.txt` or `.md` for raw interviews, notes, transcripts, or field material.
+
+```text
+Participant A: The checkout flow feels long.
+Participant B: Clearer hints would help me recover.
 ```
 
----
+### JSONL
 
-## CLI Usage
+Use one record per line.
 
-`gtflow` exposes focused commands:
+```jsonl
+{"id":"p1-001","speaker":"Participant A","text":"The checkout flow feels long.","participant":"P1"}
+{"id":"p2-001","speaker":"Participant B","text":"Clearer hints would help me recover.","participant":"P2"}
+```
+
+Supported text keys: `text`, `content`, `utterance`.
+
+Supported identity keys: `seg_id`, `id`, `ID`, `Id`.
+
+Supported speaker keys: `speaker`, `role`.
+
+All additional fields become segment metadata.
+
+### CSV
+
+Use columns such as:
+
+```csv
+id,speaker,text,participant
+c1,A,The checkout flow feels long.,P1
+c2,B,Clearer hints would help me recover.,P2
+```
+
+GTFlow preserves row metadata and creates unique segment IDs when source IDs repeat.
+
+## CLI Commands
 
 ```bash
-# 1) Segment an input file into analysis units
-#    Supported inputs: .txt/.md (raw text), .jsonl, .csv
-gtflow segment   -i data/interview_1.txt   -o output   --strategy dialog   --max-segment-chars 800
+# Segment input into analysis units
+gtflow segment -i data/interview_1.txt -o output --strategy dialog --max-segment-chars 800
 
-# 2) Run the entire pipeline using a YAML config
-gtflow run-all   -i data/interview_1.txt   -c config.yaml   -o output   --force                  # optional, overwrite existing artifacts
+# Run the full pipeline
+gtflow run-all -i data/interview_1.txt -c config.yaml -o output --force
 
-# 3) Build a report from saved artifacts
+# Rebuild the HTML report from saved artifacts
 gtflow report -o output
 
-# General help
-gtflow --help
-gtflow run-all --help
+# Use a custom report template and section switches
+gtflow report -o output --template templates/report.html --methods --results --appendices
+gtflow report -o output --template templates/report.html --no-appendices
+
+# Compare two GTFlow output directories
+gtflow compare-projects --left output_a --right output_b -o comparison.json
+
+# Merge multiple GTFlow output directories
+gtflow merge-projects output_a output_b -o merged_output
 ```
 
-What `run-all` produces under `output/`:
-- `segments.json`
-- `open_codes.json`
+## Output Artifacts
+
+The full pipeline writes a structured project directory:
+
+- `segments.json` and `segments.jsonl`
+- `open_codes.json` and, for streamed runs, `open_codes.jsonl`
 - `codebook.json`
 - `axial_triples.json`
-- `theory.json` and `theory.md`
+- `theory.json`
+- `theory.md`
 - `gioia.json`
 - `negatives.json`
 - `saturation.json`
+- `saturation_metrics.json`
+- `analytics.json`
 - `report.html`
-- `run_meta.json` (token usage by stage and estimated cost)
-- For large runs, JSONL streams are also emitted: `segments.jsonl`, `open_codes.jsonl` (full results), plus `open_codes.json` keeps a sample for quick inspection.
+- `run_meta.json`
 
----
+`run_meta.json` stores per-stage token usage. Cost is estimated only when both model price fields are set.
 
-## Handling Large Inputs
-- Keep segment size small (`run.max_segment_chars` 400–800) so each model call stays within context.
-- Enable streaming for long corpora (`run.stream_open_coding: true` or lower the `run.stream_open_coding_threshold`) to write open codes directly to `open_codes.jsonl` instead of keeping all in memory.
-- Cap prompt size with `run.max_prompt_chars` (default 200k chars, tuned for 128k-context models). Lower it if you target smaller-context models; raise only if your provider guarantees a larger window.
-- JSONL artifacts (`segments.jsonl`, `open_codes.jsonl`) let you resume or post-process without re-running the whole pipeline.
+## Analysis Views
 
----
+The UI and report expose:
 
-## UI Usage
+- Gioia alignment with editable first-order codes, second-order themes, and aggregate dimensions.
+- Negative-case summaries and supporting rows.
+- Participant-level contrasts.
+- Code frequency charts.
+- Multiple saturation metrics and novelty curves.
+- Raw segments, open codes, and codebook tables.
 
-Launch:
-```bash
-gtflow-ui
+## Large Inputs
+
+Use these settings for long studies:
+
+```yaml
+run:
+  max_segment_chars: 400
+  batch_size: 10
+  concurrent_workers: 6
+  rate_limit_rps: 2.0
+  max_prompt_chars: 200000
+  stream_open_coding: true
 ```
-The dashboard lets you:
-- Configure the provider (OpenAI‑compatible, Azure OpenAI, Anthropic), model, temperature, and token limits.
-- Choose segmentation strategy and batching.
-- Run open coding, build a codebook, generate axial CAR triples, derive a core category and storyline, scan negatives, approximate saturation.
-- Download a ZIP of artifacts and an HTML report.
 
----
+Streaming writes full open-coding output to `open_codes.jsonl` while keeping `open_codes.json` as a quick inspection sample.
 
-## Inputs and Outputs
+## Report Templates
 
-**Typical inputs**
-- Plain text files (`.txt`, `.md`).
-- JSONL with one record per line. Suggested keys: `id`, `text`, optional `speaker`, optional `meta`.
-- CSV with columns: `id`, `text`, optional `speaker` and `meta`.
+`gtflow report` accepts a Jinja2 template:
 
-**Key outputs**
-- `segments.json`: segmented units used for analysis.
-- `open_codes.json`: initial codes per segment.
-- `codebook.json`: first‑order codes, definitions, and Gioia groupings.
-- `axial_triples.json`: CAR triples with short evidence spans.
-- `theory.json` and `theory.md`: core category and storyline.
-- `gioia.json`: compact Gioia view used by the report.
-- `negatives.json`: candidate negative cases from the corpus.
-- `saturation.json`: sliding‑window estimate of new‑code discovery.
-- `report.html`: consolidated visual report with a Gioia panel and a Mermaid diagram for CAR relations.
-- `run_meta.json`: per‑stage token counts and estimated cost.
+```bash
+gtflow report -o output --template templates/report.html
+```
 
----
+Template rendering receives project stats, Gioia data, axial triples, sampled open codes, codebook entries, analytics, and saturation metrics. Section flags control methods, results, and appendices:
 
-## Reproducibility, Usage, and Cost
-- Each run writes a structured set of artifacts to the output directory so you can rerun, diff, and audit results.
-- The CLI prints a Token Usage by Stage table and writes `run_meta.json` with input tokens, output tokens, totals, and an estimated cost using your configured `price_input_per_1k` and `price_output_per_1k`.
-- For ethics and privacy, ensure consent for any interview or sensitive text and follow your IRB or organizational guidelines.
+```bash
+gtflow report -o output --no-methods
+gtflow report -o output --no-results
+gtflow report -o output --no-appendices
+```
 
----
+## Docker
 
-## Roadmap
-- Batch editing and alignment in the Gioia panel.
-- Visualizations for negative cases and participant‑level contrasts.
-- Multiple saturation metrics in parallel.
-- Configurable report templates for methods, results, and appendices.
-- Project‑level comparison and merging utilities.
+```bash
+docker build -t gtflow .
+docker run --rm -p 8501:8501 \
+  -e OPENAI_API_KEY=YOUR_OPENAI_API_KEY \
+  -e OPENAI_BASE_URL=https://api.openai.com/v1 \
+  gtflow
+```
 
----
+Open `http://127.0.0.1:8501`.
 
-## Contributing
-Contributions are welcome. A suggested process:
-1. Open an issue to discuss the proposal.
-2. Fork the repo and create a feature branch.
-3. Add tests or local checks where reasonable.
-4. Submit a PR describing motivation and changes.
+## Development Checks
 
----
+```bash
+python -m compileall -q gtflow
+gtflow --help
+python -m gtflow.gui.launcher --help
+```
 
 ## License
-This project is licensed under the MIT License.
+
+MIT

@@ -22,9 +22,9 @@ class ProviderConfig(BaseModel):
     max_tokens: int = 1024
     structured: bool = True
     json_mode_fallback: bool = True
-    # price for estimation ($ per 1k tokens)
-    price_input_per_1k: float = 0.002
-    price_output_per_1k: float = 0.006
+    # Optional price for cost estimation ($ per 1k tokens).
+    price_input_per_1k: Optional[float] = None
+    price_output_per_1k: Optional[float] = None
 
 class RunConfig(BaseModel):
     segmentation_strategy: Literal["dialog","paragraph","line"] = "dialog"
@@ -46,6 +46,6 @@ class OutputConfig(BaseModel):
     log_file: str = "analysis.log"
 
 class AppConfig(BaseModel):
-    provider: ProviderConfig = ProviderConfig()
-    run: RunConfig = RunConfig()
-    output: OutputConfig = OutputConfig()
+    provider: ProviderConfig = Field(default_factory=ProviderConfig)
+    run: RunConfig = Field(default_factory=RunConfig)
+    output: OutputConfig = Field(default_factory=OutputConfig)

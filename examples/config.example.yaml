@@ -8,8 +8,8 @@ provider:
   structured: true
   max_tokens: 1024
   temperature: 0.2
-  price_input_per_1k: 0.002
-  price_output_per_1k: 0.006
+  price_input_per_1k: null    # optional; leave null to skip cost estimation
+  price_output_per_1k: null   # optional; leave null to skip cost estimation
 
 run:
   segmentation_strategy: dialog   # dialog | paragraph | line

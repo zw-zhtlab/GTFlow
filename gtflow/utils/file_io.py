@@ -7,7 +7,7 @@ def ensure_dir(p: str):
     os.makedirs(p, exist_ok=True)
 
 def read_text(p: str) -> str:
-    with open(p, "r", encoding="utf-8") as f:
+    with open(p, "r", encoding="utf-8-sig") as f:
         return f.read()
 
 def write_text(p: str, s: str):

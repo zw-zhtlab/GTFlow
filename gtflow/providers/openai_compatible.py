@@ -8,8 +8,12 @@ from .base import LLMProvider
 class OpenAICompatibleProvider(LLMProvider):
     def __init__(self, conf):
         super().__init__(conf)
-        base_url = conf.base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        provider_name = (conf.name or "openai_compatible").lower()
+        default_base_url = "http://localhost:11434/v1" if provider_name == "ollama" else "https://api.openai.com/v1"
+        base_url = conf.base_url or os.getenv("OPENAI_BASE_URL") or default_base_url
         api_key = conf.api_key or os.getenv("OPENAI_API_KEY")
+        if provider_name == "ollama" and not api_key:
+            api_key = "ollama"
         organization = conf.organization or os.getenv("OPENAI_ORG_ID")
         headers = {}
         if conf.extra_headers:

@@ -11,4 +11,4 @@ COPY . /work
 RUN pip install -e .
 
 EXPOSE 8501
-CMD ["streamlit", "run", "gtflow/gui/app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+CMD ["gtflow-ui", "--host", "0.0.0.0", "--port", "8501", "--no-browser"]

@@ -1,24 +1,36 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+import argparse
+import socket
+import webbrowser
+
+from .app import run_server
 
 
 def main() -> None:
-    """Launch the Streamlit UI via `streamlit run`.
+    parser = argparse.ArgumentParser(description="Launch the GTFlow local web UI.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8501)
+    parser.add_argument("--no-browser", action="store_true")
+    args = parser.parse_args()
 
-    This wrapper exists so `gtflow-ui` works as a console script entry point.
-    Any additional CLI args are forwarded to Streamlit.
-    """
+    port = _find_port(args.host, args.port)
+    url = f"http://{args.host}:{port}"
+    if not args.no_browser:
+        webbrowser.open(url)
+    run_server(args.host, port)
 
-    try:
-        from streamlit.web import cli as stcli
-    except Exception as exc:
-        raise RuntimeError(
-            "Streamlit is required for the UI. Install with `pip install streamlit`."
-        ) from exc
 
-    app_path = str(Path(__file__).with_name("app.py"))
-    argv = ["streamlit", "run", app_path, *sys.argv[1:]]
-    sys.argv = argv
-    raise SystemExit(stcli.main())
+def _find_port(host: str, start: int) -> int:
+    for port in range(start, start + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind((host, port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError(f"No free port found from {start} to {start + 19}.")
+
+
+if __name__ == "__main__":
+    main()

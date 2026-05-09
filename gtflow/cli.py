@@ -16,13 +16,24 @@ from .pipeline.axial_coder import build_axial
 from .pipeline.selective_coder import build_theory
 from .pipeline.gioia_view import to_gioia
 from .pipeline.negatives_scanner import scan_negatives
-from .pipeline.saturation import saturation
+from .pipeline.saturation import saturation_suite
+from .pipeline.analytics import build_analysis_bundle
+from .pipeline.project_ops import compare_projects as compare_project_dirs, merge_projects as merge_project_dirs
 from .pipeline.report_html import emit_html
 from .rate_limiter import TokenBucket
 from .models.schemas import Segment
-from .cost import UsageAccumulator, estimate_cost
+from .cost import Usage, estimate_cost
 
 app = typer.Typer(help="GTFlow grounded theory pipeline")
+
+
+def _estimated_cost(input_tokens: int, output_tokens: int, price_in: Optional[float], price_out: Optional[float]) -> Optional[float]:
+    cost = estimate_cost(Usage(input_tokens, output_tokens), price_in, price_out)
+    return round(cost, 6) if cost is not None else None
+
+
+def _format_cost(value) -> str:
+    return "" if value is None else str(value)
 
 def _load_segments_from_structured_input(
     input_path: str, strategy: str, max_segment_chars: int
@@ -250,11 +261,13 @@ def run_all(
     # helper for per-stage usage delta
     def usage_delta(before):
         after = provider.total_usage()
+        input_tokens = after["input_tokens"] - before["input_tokens"]
+        output_tokens = after["output_tokens"] - before["output_tokens"]
         return {
-            "input_tokens": after["input_tokens"] - before["input_tokens"],
-            "output_tokens": after["output_tokens"] - before["output_tokens"],
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "total_tokens": after["total_tokens"] - before["total_tokens"],
-            "estimated_cost": round((after["input_tokens"] - before["input_tokens"]) / 1000.0 * price_in + (after["output_tokens"] - before["output_tokens"]) / 1000.0 * price_out, 6)
+            "estimated_cost": _estimated_cost(input_tokens, output_tokens, price_in, price_out),
         }
 
     # 2) Open coding
@@ -381,15 +394,31 @@ def run_all(
         run_meta["stages"]["negatives"] = usage_delta(before)
 
     # 8) Saturation
+    _stage_header("Analytics")
+    analytics_json = os.path.join(out_dir, "analytics.json")
+    if not os.path.exists(analytics_json) or force:
+        open_items_full = list(_iter_open_codes(open_json, open_jsonl))
+        negatives_for_analytics = read_json(negatives_json) if os.path.exists(negatives_json) else []
+        analytics = build_analysis_bundle(segs, open_items_full, negatives_for_analytics)
+        write_json(analytics_json, analytics)
+
     _stage_header("Saturation")
     saturation_json = os.path.join(out_dir, "saturation.json")
+    saturation_metrics_json = os.path.join(out_dir, "saturation_metrics.json")
     if not os.path.exists(saturation_json) or force:
         if os.path.exists(open_jsonl):
             oc_iter = iter_jsonl(open_jsonl)
         else:
             oc_iter = read_json(open_json)
-        sat = saturation(oc_iter)
-        write_json(saturation_json, sat)
+        sat_metrics = saturation_suite(oc_iter)
+        write_json(saturation_json, sat_metrics["default"])
+        write_json(saturation_metrics_json, sat_metrics)
+    elif not os.path.exists(saturation_metrics_json):
+        if os.path.exists(open_jsonl):
+            oc_iter = iter_jsonl(open_jsonl)
+        else:
+            oc_iter = read_json(open_json)
+        write_json(saturation_metrics_json, saturation_suite(oc_iter))
 
     # 9) HTML Report
     _stage_header("HTML Report")
@@ -411,7 +440,18 @@ def run_all(
         "codebook_entries": len(codebook.entries),
         "triples": len(triples),
     }
-    emit_html(html_path, stats, read_json(gioia_json), [t.model_dump() for t in triples], open_items, codebook)
+    analytics_data = read_json(analytics_json) if os.path.exists(analytics_json) else {}
+    saturation_metrics_data = read_json(saturation_metrics_json) if os.path.exists(saturation_metrics_json) else {}
+    emit_html(
+        html_path,
+        stats,
+        read_json(gioia_json),
+        [t.model_dump() for t in triples],
+        open_items,
+        codebook,
+        analytics=analytics_data,
+        saturation_metrics=saturation_metrics_data,
+    )
 
     # totals
     totals = provider.total_usage()
@@ -419,7 +459,7 @@ def run_all(
         "input_tokens": totals["input_tokens"],
         "output_tokens": totals["output_tokens"],
         "total_tokens": totals["total_tokens"],
-        "estimated_cost": round(totals["input_tokens"]/1000.0*price_in + totals["output_tokens"]/1000.0*price_out, 6)
+        "estimated_cost": _estimated_cost(totals["input_tokens"], totals["output_tokens"], price_in, price_out),
     }
     write_json(os.path.join(out_dir, "run_meta.json"), run_meta)
 
@@ -432,12 +472,17 @@ def run_all(
     table.add_column("Total")
     table.add_column("Est. Cost ($)")
     for k,v in run_meta["stages"].items():
-        table.add_row(k, str(v["input_tokens"]), str(v["output_tokens"]), str(v["total_tokens"]), str(v["estimated_cost"]))
-    table.add_row("ALL", str(run_meta["totals"]["input_tokens"]), str(run_meta["totals"]["output_tokens"]), str(run_meta["totals"]["total_tokens"]), str(run_meta["totals"]["estimated_cost"]))
+        table.add_row(k, str(v["input_tokens"]), str(v["output_tokens"]), str(v["total_tokens"]), _format_cost(v["estimated_cost"]))
+    table.add_row("ALL", str(run_meta["totals"]["input_tokens"]), str(run_meta["totals"]["output_tokens"]), str(run_meta["totals"]["total_tokens"]), _format_cost(run_meta["totals"]["estimated_cost"]))
     console.print(table)
 
-@app.command()
-def html_report(out_dir: str = typer.Option("output", "-o")):
+def _emit_report_from_out_dir(
+    out_dir: str,
+    template_path: Optional[str] = None,
+    methods: bool = True,
+    results: bool = True,
+    appendices: bool = True,
+) -> None:
     codebook = read_json(os.path.join(out_dir, "codebook.json"))
     triples = read_json(os.path.join(out_dir, "axial_triples.json"))
     open_json = os.path.join(out_dir, "open_codes.json")
@@ -461,11 +506,93 @@ def html_report(out_dir: str = typer.Option("output", "-o")):
     }
     from .pipeline.gioia_view import to_gioia
     from .models.schemas import Codebook
-    emit_html(os.path.join(out_dir,"report.html"), stats, to_gioia(Codebook.model_validate(codebook)), triples, open_items, Codebook.model_validate(codebook))
+    analytics_path = os.path.join(out_dir, "analytics.json")
+    saturation_metrics_path = os.path.join(out_dir, "saturation_metrics.json")
+    negatives_path = os.path.join(out_dir, "negatives.json")
+    negatives = read_json(negatives_path) if os.path.exists(negatives_path) else []
+    analytics_data = (
+        read_json(analytics_path)
+        if os.path.exists(analytics_path)
+        else build_analysis_bundle(segs, open_items, negatives)
+    )
+    saturation_metrics_data = (
+        read_json(saturation_metrics_path)
+        if os.path.exists(saturation_metrics_path)
+        else saturation_suite(open_items)
+    )
+    emit_html(
+        os.path.join(out_dir, "report.html"),
+        stats,
+        to_gioia(Codebook.model_validate(codebook)),
+        triples,
+        open_items,
+        Codebook.model_validate(codebook),
+        analytics=analytics_data,
+        saturation_metrics=saturation_metrics_data,
+        template_path=template_path,
+        sections={"methods": methods, "results": results, "appendices": appendices},
+    )
+
+
+@app.command()
+def html_report(
+    out_dir: str = typer.Option("output", "-o"),
+    template_path: Optional[str] = typer.Option(None, "--template", help="Optional Jinja2 report template"),
+    methods: bool = typer.Option(True, "--methods/--no-methods"),
+    results: bool = typer.Option(True, "--results/--no-results"),
+    appendices: bool = typer.Option(True, "--appendices/--no-appendices"),
+):
+    _emit_report_from_out_dir(
+        out_dir,
+        template_path=template_path,
+        methods=methods,
+        results=results,
+        appendices=appendices,
+    )
     console.print(f"[ok] Wrote {out_dir}/report.html")
 
 
 @app.command()
-def report(out_dir: str = typer.Option("output", "-o")):
+def report(
+    out_dir: str = typer.Option("output", "-o"),
+    template_path: Optional[str] = typer.Option(None, "--template", help="Optional Jinja2 report template"),
+    methods: bool = typer.Option(True, "--methods/--no-methods"),
+    results: bool = typer.Option(True, "--results/--no-results"),
+    appendices: bool = typer.Option(True, "--appendices/--no-appendices"),
+):
     """Alias for `html-report`."""
-    html_report(out_dir=out_dir)
+    _emit_report_from_out_dir(
+        out_dir,
+        template_path=template_path,
+        methods=methods,
+        results=results,
+        appendices=appendices,
+    )
+    console.print(f"[ok] Wrote {out_dir}/report.html")
+
+
+@app.command("compare-projects")
+def compare_projects(
+    left_dir: str = typer.Option(..., "--left"),
+    right_dir: str = typer.Option(..., "--right"),
+    out_path: Optional[str] = typer.Option(None, "-o", help="Optional JSON output path"),
+):
+    result = compare_project_dirs(left_dir, right_dir)
+    if out_path:
+        write_json(out_path, result)
+        console.print(f"[ok] Wrote {out_path}")
+    else:
+        console.print_json(json.dumps(result, ensure_ascii=False))
+
+
+@app.command("merge-projects")
+def merge_projects(
+    project_dirs: list[str] = typer.Argument(..., help="GTFlow output directories to merge"),
+    out_dir: str = typer.Option(..., "-o", help="Merged output directory"),
+):
+    result = merge_project_dirs(project_dirs, out_dir)
+    console.print_json(json.dumps(result, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    app()

@@ -51,6 +51,7 @@ def build_axial(
         timeout_sec=timeout_sec,
         rate_limiter=rate_limiter,
         max_retries=max_retries,
+        operation_name="Axial coding request",
     )
     data = try_parse_json(raw)
     adapter = TypeAdapter(List[AxialTriple])
