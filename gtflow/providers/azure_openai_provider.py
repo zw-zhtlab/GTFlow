@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import os
+from urllib.parse import quote, urlencode, urlsplit
 import requests
 from .base import LLMProvider
 
@@ -19,10 +20,25 @@ class AzureOpenAIProvider(LLMProvider):
         endpoint = conf.endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
         deployment = conf.deployment or os.getenv("AZURE_OPENAI_DEPLOYMENT")
         api_version = conf.api_version or os.getenv("AZURE_OPENAI_API_VERSION")
-        api_key = conf.api_key or os.getenv("AZURE_OPENAI_API_KEY")
+        # Do not attach a machine credential to an endpoint supplied by a request.
+        api_key = conf.api_key
+        if not api_key and not conf.endpoint:
+            api_key = os.getenv("AZURE_OPENAI_API_KEY")
         if not endpoint or not deployment or not api_key:
             raise ValueError("AzureOpenAI requires endpoint, deployment and api_key.")
-        self.url = f"{endpoint.rstrip('/')}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        parsed = urlsplit(endpoint)
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("AzureOpenAI endpoint must be an HTTP(S) origin without credentials or a query.")
+        safe_deployment = quote(str(deployment), safe="")
+        query = urlencode({"api-version": str(api_version or "")})
+        self.url = f"{endpoint.rstrip('/')}/openai/deployments/{safe_deployment}/chat/completions?{query}"
         self.headers = {"api-key": api_key, "Content-Type": "application/json"}
 
     def _content_to_text(self, content: Any) -> str:
@@ -73,4 +89,6 @@ class AzureOpenAIProvider(LLMProvider):
             return self._content_to_text(msg.get("content"))
         except Exception as e:
             self._update_usage(0, 0)
-            raise RuntimeError(f"AzureOpenAI request failed: {e}")
+            # Requests exceptions can contain URLs and request metadata. Keep the
+            # public exception stable and secret-free while preserving the cause.
+            raise RuntimeError("AzureOpenAI request failed") from e

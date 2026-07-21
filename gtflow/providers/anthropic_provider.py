@@ -2,16 +2,23 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import os
-from anthropic import Anthropic
 from .base import LLMProvider
 
 class AnthropicProvider(LLMProvider):
     def __init__(self, conf):
         super().__init__(conf)
+        try:
+            from anthropic import Anthropic
+        except ImportError as exc:
+            raise RuntimeError(
+                "The Anthropic provider requires the 'anthropic' package. "
+                "Install GTFlow with its default dependencies."
+            ) from exc
         api_key = conf.api_key or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("Anthropic requires api_key or ANTHROPIC_API_KEY.")
-        self.client = Anthropic(api_key=api_key)
+        # Retry classification/backoff is centralized in pipeline.retry_utils.
+        self.client = Anthropic(api_key=api_key, max_retries=0)
 
     def generate_text(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, Any]] = None, **kwargs) -> str:
         # Convert OpenAI-style messages to Anthropic format

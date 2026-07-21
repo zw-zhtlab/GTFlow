@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 import csv, json, os, pathlib, asyncio, time, itertools
+from contextlib import contextmanager
 from typing import Optional
 import typer, yaml
 from rich.table import Table
@@ -12,16 +13,19 @@ from .providers.base import make_provider
 from .pipeline.segmenter import segment_dialog, segment_paragraph, segment_line
 from .pipeline.open_coder import run_open_coding, run_open_coding_streaming
 from .pipeline.codebook_builder import build_codebook
+from .pipeline.evidence import build_evidence_catalog
 from .pipeline.axial_coder import build_axial
 from .pipeline.selective_coder import build_theory
 from .pipeline.gioia_view import to_gioia
 from .pipeline.negatives_scanner import scan_negatives
 from .pipeline.saturation import saturation_suite
 from .pipeline.analytics import build_analysis_bundle
+from .pipeline.quality import build_quality_audit
+from .pipeline.stage_manifest import StageManifest, normalized_config, select_open_codes_path, sha256_file
 from .pipeline.project_ops import compare_projects as compare_project_dirs, merge_projects as merge_project_dirs
 from .pipeline.report_html import emit_html
 from .rate_limiter import TokenBucket
-from .models.schemas import Segment
+from .models.schemas import Segment, Theory
 from .cost import Usage, estimate_cost
 
 app = typer.Typer(help="GTFlow grounded theory pipeline")
@@ -190,14 +194,12 @@ def _stage_header(name: str):
 
 def _iter_open_codes(open_json: str, open_jsonl: str):
     from .models.schemas import OpenCodingItem
-    if os.path.exists(open_jsonl):
-        for rec in iter_jsonl(open_jsonl):
-            try:
-                yield OpenCodingItem.model_validate(rec)
-            except Exception:
-                continue
-    elif os.path.exists(open_json):
-        for rec in read_json(open_json):
+    selected = select_open_codes_path(os.path.dirname(os.path.abspath(open_json)))
+    if selected == os.path.abspath(open_jsonl):
+        for rec in iter_jsonl(selected):
+            yield OpenCodingItem.model_validate(rec)
+    elif selected == os.path.abspath(open_json):
+        for rec in read_json(selected):
             yield OpenCodingItem.model_validate(rec)
 
 
@@ -230,7 +232,70 @@ def run_all(
     ensure_dir(out_dir)
     rate_limiter = TokenBucket(conf.run.rate_limit_rps) if conf.run.rate_limit_rps else None
 
-    run_meta = {"stages": {}, "totals": {}}
+    safe_config = normalized_config(conf)
+    input_sha256 = sha256_file(input_path)
+    stage_manifest = StageManifest(out_dir)
+    stage_manifest.begin_run(
+        input_path=input_path,
+        input_sha256=input_sha256,
+        config=safe_config,
+    )
+    cache_hits: list[str] = []
+
+    @contextmanager
+    def tracked_stage(
+        name: str,
+        output_paths: list[str],
+        *,
+        upstream_paths: Optional[list[str]] = None,
+        cleanup_paths: Optional[list[str]] = None,
+        allow_reuse: bool = True,
+    ):
+        signature, upstream, definition = stage_manifest.signature(
+            name,
+            input_sha256=input_sha256,
+            config=safe_config,
+            upstream_paths=upstream_paths or [],
+        )
+        if allow_reuse and not force and stage_manifest.can_reuse(name, signature, output_paths):
+            cache_hits.append(name)
+            yield False, {}
+            return
+
+        stage_manifest.mark_running(
+            name,
+            signature=signature,
+            upstream=upstream,
+            definition_fingerprint=definition,
+        )
+        for path in cleanup_paths or output_paths:
+            if os.path.isfile(path):
+                os.remove(path)
+        details: dict = {}
+        try:
+            yield True, details
+        except BaseException as exc:
+            stage_manifest.mark_failed(name, exc)
+            stage_manifest.finish_run(counts={}, status="failed")
+            raise
+        else:
+            stage_manifest.mark_complete(
+                name,
+                output_paths=output_paths,
+                counts=details.get("counts"),
+                metadata=details.get("metadata"),
+            )
+
+    run_meta = {
+        "stages": {},
+        "totals": {},
+        "provenance": {
+            "project_id": stage_manifest.project_id,
+            "stage_manifest": "stage_manifest.json",
+            "input_sha256": input_sha256,
+        },
+        "cache_hits": cache_hits,
+    }
     price_in = conf.provider.price_input_per_1k
     price_out = conf.provider.price_output_per_1k
     output_language = getattr(conf.provider, "output_language", None) or "English"
@@ -242,15 +307,17 @@ def run_all(
     _stage_header("Segment")
     seg_json = os.path.join(out_dir, "segments.json")
     seg_jsonl = os.path.join(out_dir, "segments.jsonl")
-    if not os.path.exists(seg_json) or force:
-        strat = conf.run.segmentation_strategy
-        segs = _load_segments(input_path, strat, conf.run.max_segment_chars)
-        write_json(seg_json, [s.model_dump() for s in segs])
-        # also emit jsonl for large runs
-        from .utils.jsonl_utils import write_jsonl
-        write_jsonl(seg_jsonl, (s.model_dump() for s in segs))
-    else:
-        segs = [Segment.model_validate(x) for x in read_json(seg_json)]
+    with tracked_stage("segment", [seg_json, seg_jsonl]) as (execute, details):
+        if execute:
+            strat = conf.run.segmentation_strategy
+            segs = _load_segments(input_path, strat, conf.run.max_segment_chars)
+            write_json(seg_json, [s.model_dump() for s in segs])
+            # also emit jsonl for large runs
+            from .utils.jsonl_utils import write_jsonl
+            write_jsonl(seg_jsonl, (s.model_dump() for s in segs))
+            details["counts"] = {"segments": len(segs)}
+        else:
+            segs = [Segment.model_validate(x) for x in read_json(seg_json)]
     segments_count = len(segs)
     console.print(f"[ok] segments: {segments_count}")
 
@@ -274,153 +341,267 @@ def run_all(
     _stage_header("Open Coding")
     open_json = os.path.join(out_dir, "open_codes.json")
     open_jsonl = os.path.join(out_dir, "open_codes.jsonl")
-    if (not os.path.exists(open_json) and not os.path.exists(open_jsonl)) or force:
-        seg_iter = (s.model_dump() for s in segs)
-        before = provider.total_usage()
-        if conf.run.stream_open_coding or len(segs) >= conf.run.stream_open_coding_threshold:
-            total, sample = run_open_coding_streaming(
-                provider,
-                seg_iter,
-                output_path=open_jsonl,
-                batch_size=conf.run.batch_size,
-                max_prompt_chars=conf.run.max_prompt_chars,
-                max_retries=conf.run.retry_max,
-                timeout_sec=conf.run.timeout_sec,
-                rate_limiter=rate_limiter,
-                sample_limit=200,
-                output_language=output_language,
-            )
-            console.print(f"[ok] open coding (streamed) items: {total}")
-            write_json(open_json, [x.model_dump() for x in sample])
-            open_codes_count = total
+    stream_open_coding = conf.run.stream_open_coding or len(segs) >= conf.run.stream_open_coding_threshold
+    open_outputs = [open_json, open_jsonl] if stream_open_coding else [open_json]
+    with tracked_stage(
+        "open_coding",
+        open_outputs,
+        upstream_paths=[seg_json, seg_jsonl],
+        # Delete both formats before every rerun. A stale streamed artifact must
+        # never override a new non-streamed dataset in the same directory.
+        cleanup_paths=[open_json, open_jsonl],
+    ) as (execute, details):
+        if execute:
+            seg_iter = (s.model_dump() for s in segs)
+            before = provider.total_usage()
+            if stream_open_coding:
+                total, sample = run_open_coding_streaming(
+                    provider,
+                    seg_iter,
+                    output_path=open_jsonl,
+                    batch_size=conf.run.batch_size,
+                    max_prompt_chars=conf.run.max_prompt_chars,
+                    max_retries=conf.run.retry_max,
+                    timeout_sec=conf.run.timeout_sec,
+                    rate_limiter=rate_limiter,
+                    sample_limit=200,
+                    output_language=output_language,
+                )
+                console.print(f"[ok] open coding (streamed) items: {total}")
+                write_json(open_json, [x.model_dump() for x in sample])
+                open_codes_count = total
+            else:
+                seg_dicts = list(seg_iter)
+                items = run_open_coding(
+                    provider,
+                    seg_dicts,
+                    batch_size=conf.run.batch_size,
+                    max_prompt_chars=conf.run.max_prompt_chars,
+                    max_retries=conf.run.retry_max,
+                    timeout_sec=conf.run.timeout_sec,
+                    rate_limiter=rate_limiter,
+                    max_concurrency=max(conf.run.concurrent_workers, 1),
+                    output_language=output_language,
+                )
+                write_json(open_json, [x.model_dump() for x in items])
+                open_codes_count = len(items)
+            run_meta["stages"]["open_coding"] = usage_delta(before)
+            run_meta["stages"]["open_coding"]["items"] = open_codes_count
+            details["counts"] = {"items": int(open_codes_count or 0)}
+            details["metadata"] = {
+                "primary_output": "open_codes.jsonl" if stream_open_coding else "open_codes.json",
+                "streamed": stream_open_coding,
+            }
+        elif stream_open_coding:
+            open_codes_count = count_jsonl(open_jsonl)
         else:
-            seg_dicts = list(seg_iter)
-            items = run_open_coding(
-                provider,
-                seg_dicts,
-                batch_size=conf.run.batch_size,
-                max_prompt_chars=conf.run.max_prompt_chars,
-                max_retries=conf.run.retry_max,
-                timeout_sec=conf.run.timeout_sec,
-                rate_limiter=rate_limiter,
-                max_concurrency=max(conf.run.concurrent_workers, 1),
-                output_language=output_language,
-            )
-            write_json(open_json, [x.model_dump() for x in items])
-            open_codes_count = len(items)
-        run_meta["stages"]["open_coding"] = usage_delta(before)
-        run_meta["stages"]["open_coding"]["items"] = open_codes_count
+            open_codes_count = len(read_json(open_json))
+
+    # Canonical evidence context shared by axial/selective coding and audits.
+    evidence_catalog_json = os.path.join(out_dir, "evidence_catalog.json")
+    with tracked_stage(
+        "evidence",
+        [evidence_catalog_json],
+        upstream_paths=[seg_json, *open_outputs],
+    ) as (execute, details):
+        if execute:
+            evidence_catalog = build_evidence_catalog(segs, _iter_open_codes(open_json, open_jsonl))
+            write_json(evidence_catalog_json, evidence_catalog)
+            details["counts"] = {"evidence": len(evidence_catalog)}
+        else:
+            evidence_catalog = read_json(evidence_catalog_json)
 
     # 3) Codebook
     _stage_header("Codebook")
     codebook_json = os.path.join(out_dir, "codebook.json")
-    if not os.path.exists(codebook_json) or force:
-        items = _iter_open_codes(open_json, open_jsonl)
-        before = provider.total_usage()
-        codebook = build_codebook(
-            provider,
-            items,
-            timeout_sec=conf.run.timeout_sec,
-            rate_limiter=rate_limiter,
-            max_retries=conf.run.retry_max,
-            output_language=output_language,
-        )
-        write_json(codebook_json, codebook.model_dump())
-        run_meta["stages"]["codebook"] = usage_delta(before)
+    with tracked_stage(
+        "codebook",
+        [codebook_json],
+        upstream_paths=open_outputs,
+    ) as (execute, details):
+        if execute:
+            items = _iter_open_codes(open_json, open_jsonl)
+            before = provider.total_usage()
+            codebook = build_codebook(
+                provider,
+                items,
+                timeout_sec=conf.run.timeout_sec,
+                rate_limiter=rate_limiter,
+                max_retries=conf.run.retry_max,
+                output_language=output_language,
+            )
+            write_json(codebook_json, codebook.model_dump())
+            run_meta["stages"]["codebook"] = usage_delta(before)
+            details["counts"] = {"entries": len(codebook.entries)}
 
     # 4) Axial triples
     _stage_header("Axial Coding")
     triples_json = os.path.join(out_dir, "axial_triples.json")
-    if not os.path.exists(triples_json) or force:
-        from .models.schemas import Codebook
-        codebook = Codebook.model_validate(read_json(codebook_json))
-        before = provider.total_usage()
-        triples = build_axial(
-            provider,
-            codebook,
-            timeout_sec=conf.run.timeout_sec,
-            rate_limiter=rate_limiter,
-            max_retries=conf.run.retry_max,
-            output_language=output_language,
-        )
-        write_json(triples_json, [t.model_dump() for t in triples])
-        run_meta["stages"]["axial"] = usage_delta(before)
+    with tracked_stage(
+        "axial",
+        [triples_json],
+        upstream_paths=[codebook_json, evidence_catalog_json],
+    ) as (execute, details):
+        if execute:
+            from .models.schemas import Codebook
+            codebook = Codebook.model_validate(read_json(codebook_json))
+            before = provider.total_usage()
+            triples = build_axial(
+                provider,
+                codebook,
+                timeout_sec=conf.run.timeout_sec,
+                rate_limiter=rate_limiter,
+                max_retries=conf.run.retry_max,
+                output_language=output_language,
+                evidence_catalog=evidence_catalog,
+            )
+            write_json(triples_json, [t.model_dump() for t in triples])
+            run_meta["stages"]["axial"] = usage_delta(before)
+            details["counts"] = {"triples": len(triples)}
 
     # 5) Theory
     _stage_header("Selective Coding / Theory")
     theory_json = os.path.join(out_dir, "theory.json")
-    if not os.path.exists(theory_json) or force:
-        from .models.schemas import AxialTriple
-        triples = [AxialTriple.model_validate(x) for x in read_json(triples_json)]
-        before = provider.total_usage()
-        theory = build_theory(
-            provider,
-            triples,
-            timeout_sec=conf.run.timeout_sec,
-            rate_limiter=rate_limiter,
-            max_retries=conf.run.retry_max,
-            output_language=output_language,
-        )
-        write_json(theory_json, theory.model_dump())
-        write_text(os.path.join(out_dir,"theory.md"), f"# Core Category\n\n{theory.core_category}\n\n## Storyline\n\n{theory.storyline}\n")
-        run_meta["stages"]["theory"] = usage_delta(before)
+    theory_md = os.path.join(out_dir, "theory.md")
+    with tracked_stage(
+        "theory",
+        [theory_json, theory_md],
+        upstream_paths=[triples_json, evidence_catalog_json],
+    ) as (execute, details):
+        if execute:
+            from .models.schemas import AxialTriple
+            triples = [AxialTriple.model_validate(x) for x in read_json(triples_json)]
+            before = provider.total_usage()
+            theory = build_theory(
+                provider,
+                triples,
+                timeout_sec=conf.run.timeout_sec,
+                rate_limiter=rate_limiter,
+                max_retries=conf.run.retry_max,
+                output_language=output_language,
+                evidence_catalog=evidence_catalog,
+            )
+            write_json(theory_json, theory.model_dump())
+            write_text(
+                theory_md,
+                f"# Core Category\n\n{theory.core_category}\n\n"
+                f"## Rationale\n\n{theory.rationale or ''}\n\n"
+                f"## Storyline\n\n{theory.storyline}\n",
+            )
+            run_meta["stages"]["theory"] = usage_delta(before)
+            details["counts"] = {"theories": 1}
 
     # 6) Gioia
     _stage_header("Gioia View")
     gioia_json = os.path.join(out_dir, "gioia.json")
-    if not os.path.exists(gioia_json) or force:
-        from .models.schemas import Codebook
-        codebook = Codebook.model_validate(read_json(codebook_json))
-        gioia = to_gioia(codebook)
-        write_json(gioia_json, gioia)
+    with tracked_stage(
+        "gioia",
+        [gioia_json],
+        upstream_paths=[codebook_json],
+    ) as (execute, details):
+        if execute:
+            from .models.schemas import Codebook
+            codebook = Codebook.model_validate(read_json(codebook_json))
+            gioia = to_gioia(codebook)
+            write_json(gioia_json, gioia)
+            details["counts"] = {"entries": len(codebook.entries)}
 
     # 7) Negatives
     _stage_header("Negative Cases")
     negatives_json = os.path.join(out_dir, "negatives.json")
-    if not os.path.exists(negatives_json) or force:
-        tho = read_json(theory_json)
-        before = provider.total_usage()
-        seg_dicts = [s.model_dump() for s in segs]
-        negs = scan_negatives(
-            provider,
-            seg_dicts,
-            tho.get("storyline",""),
-            timeout_sec=conf.run.timeout_sec,
-            rate_limiter=rate_limiter,
-            max_retries=conf.run.retry_max,
-            output_language=output_language,
-        )
-        write_json(negatives_json, negs)
-        run_meta["stages"]["negatives"] = usage_delta(before)
+    validation_events = []
+    with tracked_stage(
+        "negatives",
+        [negatives_json],
+        upstream_paths=[seg_json, theory_json, evidence_catalog_json],
+    ) as (execute, details):
+        if execute:
+            tho = read_json(theory_json)
+            before = provider.total_usage()
+            seg_dicts = [s.model_dump() for s in segs]
+            negs = scan_negatives(
+                provider,
+                seg_dicts,
+                tho.get("storyline",""),
+                timeout_sec=conf.run.timeout_sec,
+                rate_limiter=rate_limiter,
+                max_retries=conf.run.retry_max,
+                output_language=output_language,
+                audit_log=validation_events,
+            )
+            write_json(negatives_json, negs)
+            run_meta["stages"]["negatives"] = usage_delta(before)
+            details["counts"] = {"negative_cases": len(negs)}
 
     # 8) Saturation
     _stage_header("Analytics")
     analytics_json = os.path.join(out_dir, "analytics.json")
-    if not os.path.exists(analytics_json) or force:
-        open_items_full = list(_iter_open_codes(open_json, open_jsonl))
-        negatives_for_analytics = read_json(negatives_json) if os.path.exists(negatives_json) else []
-        analytics = build_analysis_bundle(segs, open_items_full, negatives_for_analytics)
-        write_json(analytics_json, analytics)
+    with tracked_stage(
+        "analytics",
+        [analytics_json],
+        upstream_paths=[seg_json, *open_outputs, negatives_json],
+    ) as (execute, details):
+        if execute:
+            open_items_full = list(_iter_open_codes(open_json, open_jsonl))
+            negatives_for_analytics = read_json(negatives_json) if os.path.exists(negatives_json) else []
+            analytics = build_analysis_bundle(segs, open_items_full, negatives_for_analytics)
+            write_json(analytics_json, analytics)
+            details["counts"] = {"open_codes": len(open_items_full)}
 
     _stage_header("Saturation")
     saturation_json = os.path.join(out_dir, "saturation.json")
     saturation_metrics_json = os.path.join(out_dir, "saturation_metrics.json")
-    if not os.path.exists(saturation_json) or force:
-        if os.path.exists(open_jsonl):
-            oc_iter = iter_jsonl(open_jsonl)
-        else:
-            oc_iter = read_json(open_json)
-        sat_metrics = saturation_suite(oc_iter)
-        write_json(saturation_json, sat_metrics["default"])
-        write_json(saturation_metrics_json, sat_metrics)
-    elif not os.path.exists(saturation_metrics_json):
-        if os.path.exists(open_jsonl):
-            oc_iter = iter_jsonl(open_jsonl)
-        else:
-            oc_iter = read_json(open_json)
-        write_json(saturation_metrics_json, saturation_suite(oc_iter))
+    with tracked_stage(
+        "saturation",
+        [saturation_json, saturation_metrics_json],
+        upstream_paths=open_outputs,
+    ) as (execute, details):
+        if execute:
+            if stream_open_coding:
+                oc_iter = iter_jsonl(open_jsonl)
+            else:
+                oc_iter = read_json(open_json)
+            sat_metrics = saturation_suite(oc_iter)
+            write_json(saturation_json, sat_metrics["default"])
+            write_json(saturation_metrics_json, sat_metrics)
+            details["counts"] = {"windows": len(sat_metrics.get("default", [])) if isinstance(sat_metrics.get("default"), list) else 1}
 
-    # 9) HTML Report
+    # 9) Cross-artifact grounding audit
+    _stage_header("Quality Audit")
+    quality_json = os.path.join(out_dir, "quality.json")
+    with tracked_stage(
+        "quality",
+        [quality_json],
+        upstream_paths=[
+            seg_json,
+            *open_outputs,
+            evidence_catalog_json,
+            codebook_json,
+            triples_json,
+            negatives_json,
+        ],
+    ) as (execute, details):
+        if execute:
+            from .models.schemas import AxialTriple, Codebook
+
+            audit_open_items = list(_iter_open_codes(open_json, open_jsonl))
+            audit_codebook = Codebook.model_validate(read_json(codebook_json))
+            audit_triples = [AxialTriple.model_validate(x) for x in read_json(triples_json)]
+            audit_negatives = read_json(negatives_json) if os.path.exists(negatives_json) else []
+            quality_data = build_quality_audit(
+                segs,
+                audit_open_items,
+                audit_codebook,
+                audit_triples,
+                audit_negatives,
+                validation_events=validation_events,
+            )
+            write_json(quality_json, quality_data)
+            details["counts"] = {"validation_events": len(validation_events)}
+        else:
+            quality_data = read_json(quality_json)
+
+    # 10) HTML Report
     _stage_header("HTML Report")
     html_path = os.path.join(out_dir, "report.html")
     from .models.schemas import Codebook, AxialTriple, OpenCodingItem
@@ -442,16 +623,54 @@ def run_all(
     }
     analytics_data = read_json(analytics_json) if os.path.exists(analytics_json) else {}
     saturation_metrics_data = read_json(saturation_metrics_json) if os.path.exists(saturation_metrics_json) else {}
-    emit_html(
-        html_path,
-        stats,
-        read_json(gioia_json),
-        [t.model_dump() for t in triples],
-        open_items,
-        codebook,
-        analytics=analytics_data,
-        saturation_metrics=saturation_metrics_data,
-    )
+    theory_data = Theory.model_validate(read_json(theory_json))
+    report_totals = provider.total_usage()
+    run_meta["totals"] = {
+        "input_tokens": report_totals["input_tokens"],
+        "output_tokens": report_totals["output_tokens"],
+        "total_tokens": report_totals["total_tokens"],
+        "estimated_cost": _estimated_cost(
+            report_totals["input_tokens"], report_totals["output_tokens"], price_in, price_out
+        ),
+    }
+    if hasattr(provider, "attempt_telemetry"):
+        run_meta["attempts"] = provider.attempt_telemetry()
+    with tracked_stage(
+        "report",
+        [html_path],
+        upstream_paths=[
+            seg_json,
+            *open_outputs,
+            evidence_catalog_json,
+            codebook_json,
+            triples_json,
+            theory_json,
+            gioia_json,
+            negatives_json,
+            analytics_json,
+            saturation_metrics_json,
+            quality_json,
+        ],
+        # The report embeds current cache/provenance metadata and is cheap to
+        # rebuild, so each invocation receives a truthful run summary.
+        allow_reuse=False,
+    ) as (execute, details):
+        if execute:
+            emit_html(
+                html_path,
+                stats,
+                read_json(gioia_json),
+                [t.model_dump() for t in triples],
+                open_items,
+                codebook,
+                analytics=analytics_data,
+                saturation_metrics=saturation_metrics_data,
+                theory=theory_data,
+                quality=quality_data,
+                run_meta=run_meta,
+                evidence_catalog=evidence_catalog,
+            )
+            details["counts"] = stats
 
     # totals
     totals = provider.total_usage()
@@ -462,6 +681,7 @@ def run_all(
         "estimated_cost": _estimated_cost(totals["input_tokens"], totals["output_tokens"], price_in, price_out),
     }
     write_json(os.path.join(out_dir, "run_meta.json"), run_meta)
+    stage_manifest.finish_run(counts=stats, status="complete")
 
     console.print(f"[ok] Done. See {out_dir}")
     # pretty table
@@ -487,11 +707,12 @@ def _emit_report_from_out_dir(
     triples = read_json(os.path.join(out_dir, "axial_triples.json"))
     open_json = os.path.join(out_dir, "open_codes.json")
     open_jsonl = os.path.join(out_dir, "open_codes.jsonl")
-    if os.path.exists(open_jsonl):
-        open_items = list(itertools.islice(iter_jsonl(open_jsonl), 200))
-        open_codes_count = count_jsonl(open_jsonl)
-    elif os.path.exists(open_json):
-        open_items = read_json(open_json)
+    selected_open_codes = select_open_codes_path(out_dir)
+    if selected_open_codes == os.path.abspath(open_jsonl):
+        open_items = list(itertools.islice(iter_jsonl(selected_open_codes), 200))
+        open_codes_count = count_jsonl(selected_open_codes)
+    elif selected_open_codes == os.path.abspath(open_json):
+        open_items = read_json(selected_open_codes)
         open_codes_count = len(open_items)
     else:
         open_items = []
@@ -520,15 +741,44 @@ def _emit_report_from_out_dir(
         if os.path.exists(saturation_metrics_path)
         else saturation_suite(open_items)
     )
+    codebook_model = Codebook.model_validate(codebook)
+    theory_path = os.path.join(out_dir, "theory.json")
+    quality_path = os.path.join(out_dir, "quality.json")
+    evidence_catalog_path = os.path.join(out_dir, "evidence_catalog.json")
+    run_meta_path = os.path.join(out_dir, "run_meta.json")
+    theory_data = Theory.model_validate(read_json(theory_path)) if os.path.exists(theory_path) else None
+    if os.path.exists(evidence_catalog_path):
+        evidence_catalog = read_json(evidence_catalog_path)
+    else:
+        all_open_items = list(_iter_open_codes(open_json, open_jsonl))
+        evidence_catalog = build_evidence_catalog(segs, all_open_items)
+        write_json(evidence_catalog_path, evidence_catalog)
+    if os.path.exists(quality_path):
+        quality_data = read_json(quality_path)
+    else:
+        all_open_items = list(_iter_open_codes(open_json, open_jsonl))
+        quality_data = build_quality_audit(
+            segs,
+            all_open_items,
+            codebook_model,
+            triples,
+            negatives,
+        )
+        write_json(quality_path, quality_data)
+    run_meta_data = read_json(run_meta_path) if os.path.exists(run_meta_path) else {}
     emit_html(
         os.path.join(out_dir, "report.html"),
         stats,
-        to_gioia(Codebook.model_validate(codebook)),
+        to_gioia(codebook_model),
         triples,
         open_items,
-        Codebook.model_validate(codebook),
+        codebook_model,
         analytics=analytics_data,
         saturation_metrics=saturation_metrics_data,
+        theory=theory_data,
+        quality=quality_data,
+        run_meta=run_meta_data,
+        evidence_catalog=evidence_catalog,
         template_path=template_path,
         sections={"methods": methods, "results": results, "appendices": appendices},
     )

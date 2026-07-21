@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from typing import Iterable, List, Dict, Tuple
+from typing import Iterable, List, Dict, Optional, Tuple
 
 def saturation(open_codes: Iterable[Dict], window: int = 20, threshold: float = 0.05) -> Dict:
     new_counts, cumulative_unique = _new_code_counts(open_codes)
@@ -57,22 +57,34 @@ def _new_code_counts(open_codes: Iterable[Dict]) -> Tuple[List[int], List[int]]:
 
 
 def _saturation_from_counts(new_counts: List[int], window: int, threshold: float) -> Dict:
-    rates = []
+    rates: List[Optional[float]] = []
     for i in range(len(new_counts)):
-        lo = max(0, i-window+1)
-        s = sum(new_counts[lo:i+1])
-        rates.append(s / max(1, (i-lo+1)))
+        # Partial prefixes are not windows. Treating the first three empty
+        # segments as three low-novelty windows caused false saturation before
+        # enough material had even been observed.
+        if i + 1 < window:
+            rates.append(None)
+            continue
+        lo = i - window + 1
+        rates.append(sum(new_counts[lo : i + 1]) / window)
     idx = None
     consec = 0
     for i, r in enumerate(rates):
-        if r <= threshold:
+        if r is not None and r <= threshold:
             consec += 1
             if consec >= 3:
                 idx = i
                 break
         else:
             consec = 0
-    return {"window": window, "threshold": threshold, "saturation_seg_index": idx, "rates": rates}
+    return {
+        "metric_label": "code_novelty",
+        "metric_definition": "mean newly observed unique codes per source segment over a complete rolling window",
+        "window": window,
+        "threshold": threshold,
+        "saturation_seg_index": idx,
+        "rates": rates,
+    }
 
 
 def _initial_codes(item):

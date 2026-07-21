@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import Dict, List, Literal, Optional
 
 class Segment(BaseModel):
     seg_id: str
@@ -19,6 +19,12 @@ class OpenCodingItem(BaseModel):
     in_vivo_phrases: List[str] = Field(default_factory=list)
     initial_codes: List[InitialCode] = Field(default_factory=list)
     quick_memo: Optional[str] = None
+    # Pipeline-owned provenance. These fields are never delegated to the model.
+    # A source segment therefore always has an explicit outcome, including when
+    # parsing or validation failed after retries.
+    status: Literal["ok", "failed"] = "ok"
+    validation_errors: List[str] = Field(default_factory=list)
+    source_index: Optional[int] = None
 
 class CodebookEntry(BaseModel):
     code: str
@@ -39,6 +45,7 @@ class AxialTriple(BaseModel):
     action: str
     result: str
     evidence: List[str] = Field(default_factory=list)
+    invalid_evidence: List[str] = Field(default_factory=list)
 
 class Theory(BaseModel):
     core_category: str

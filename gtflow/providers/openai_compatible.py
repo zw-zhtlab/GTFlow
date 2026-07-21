@@ -1,24 +1,70 @@
 
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
+import ipaddress
 import os
-from openai import OpenAI
+from urllib.parse import urlsplit
 from .base import LLMProvider
+
+
+def _is_loopback_url(value: str) -> bool:
+    try:
+        host = (urlsplit(value).hostname or "").rstrip(".").lower()
+    except ValueError:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 class OpenAICompatibleProvider(LLMProvider):
     def __init__(self, conf):
         super().__init__(conf)
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError(
+                "The OpenAI-compatible provider requires the 'openai' package. "
+                "Install GTFlow with its default dependencies."
+            ) from exc
         provider_name = (conf.name or "openai_compatible").lower()
         default_base_url = "http://localhost:11434/v1" if provider_name == "ollama" else "https://api.openai.com/v1"
         base_url = conf.base_url or os.getenv("OPENAI_BASE_URL") or default_base_url
-        api_key = conf.api_key or os.getenv("OPENAI_API_KEY")
+        # A caller-selected endpoint must never inherit a process-wide credential.
+        # Otherwise a request to the local UI could point at an attacker and cause
+        # the server's OPENAI_API_KEY to be sent there.
+        api_key = conf.api_key
+        if not api_key and not conf.base_url:
+            api_key = os.getenv("OPENAI_API_KEY")
         if provider_name == "ollama" and not api_key:
             api_key = "ollama"
-        organization = conf.organization or os.getenv("OPENAI_ORG_ID")
+        if not api_key:
+            raise ValueError("An explicit API key is required when using a custom base URL.")
+        organization = conf.organization
+        if not organization and not conf.base_url:
+            organization = os.getenv("OPENAI_ORG_ID")
         headers = {}
         if conf.extra_headers:
             headers.update(conf.extra_headers)
-        self.client = OpenAI(base_url=base_url, api_key=api_key, organization=organization, default_headers=headers)
+        # GTFlow owns the bounded retry policy and telemetry. Disable the SDK's
+        # implicit retry loop so one configured attempt maps to one HTTP attempt.
+        client_options: Dict[str, Any] = {
+            "base_url": base_url,
+            "api_key": api_key,
+            "organization": organization,
+            "default_headers": headers,
+            "max_retries": 0,
+        }
+        if _is_loopback_url(str(base_url)):
+            # On Windows, HTTPX may inherit the system proxy even when no proxy
+            # environment variable is present. Loopback provider traffic must
+            # stay on-device instead of leaking through that proxy.
+            import httpx
+
+            client_options["http_client"] = httpx.Client(trust_env=False)
+        self.client = OpenAI(**client_options)
         self.use_responses = bool(conf.use_responses_api)
 
     def _content_to_text(self, content: Any) -> str:
@@ -52,18 +98,15 @@ class OpenAICompatibleProvider(LLMProvider):
         try:
             usage = getattr(obj, "usage", None) or {}
             # /v1/chat/completions returns prompt/completion tokens; /v1/responses returns input/output tokens.
-            prompt = (
-                getattr(usage, "prompt_tokens", None)
-                or usage.get("prompt_tokens", None)
-                or getattr(usage, "input_tokens", None)
-                or usage.get("input_tokens", 0)
-            )
-            completion = (
-                getattr(usage, "completion_tokens", None)
-                or usage.get("completion_tokens", None)
-                or getattr(usage, "output_tokens", None)
-                or usage.get("output_tokens", 0)
-            )
+            def value_for(*names: str) -> int:
+                for name in names:
+                    value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+                    if value is not None:
+                        return int(value)
+                return 0
+
+            prompt = value_for("prompt_tokens", "input_tokens")
+            completion = value_for("completion_tokens", "output_tokens")
             self._update_usage(prompt, completion)
         except Exception:
             self._update_usage(0, 0)
@@ -105,6 +148,38 @@ class OpenAICompatibleProvider(LLMProvider):
             return {"format": text_format}
         return None
 
+    def _can_fallback_from_responses(self, exc: Exception) -> bool:
+        """Allow endpoint-compatibility fallback, never a nested transient retry."""
+        status = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        if status is None and response is not None:
+            status = getattr(response, "status_code", None)
+        try:
+            status = int(status) if status is not None else None
+        except (TypeError, ValueError):
+            status = None
+        message = str(exc).lower()
+        if any(
+            token in message
+            for token in (
+                "context length",
+                "maximum context length",
+                "too many tokens",
+                "rate limit",
+                "timeout",
+                "temporarily unavailable",
+            )
+        ):
+            return False
+        if status in {400, 404, 405, 415, 422, 501}:
+            return True
+        if status is not None:
+            return False
+        return isinstance(exc, (AttributeError, NotImplementedError)) or any(
+            token in message
+            for token in ("responses endpoint", "unknown endpoint", "method not allowed", "unsupported endpoint")
+        )
+
     def generate_text(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, Any]] = None, **kwargs) -> str:
         force_responses = bool(kwargs.pop("force_responses", False))
         force_chat = bool(kwargs.pop("force_chat", False))
@@ -139,6 +214,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     except Exception:
                         return str(resp)
             except Exception as exc:
+                if not self._can_fallback_from_responses(exc):
+                    raise
                 responses_exc = exc
 
         kwargs_payload = dict(model=model, messages=messages, temperature=temperature)

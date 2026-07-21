@@ -9,47 +9,55 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <a class="skip-link" href="#mainContent" data-i18n="aria.skipWorkspace">Skip to workspace</a>
+    <button id="settingsBackdrop" class="settings-backdrop" type="button" aria-label="Close settings" data-i18n-aria-label="aria.closeSettings" hidden></button>
     <div class="app-shell">
-      <aside class="sidebar">
-        <div class="brand-block">
-          <img class="brand-mark" src="/static/gtflow-icon.png" alt="" aria-hidden="true" />
-          <div>
-            <div class="brand-title">GTFlow</div>
-            <div class="brand-subtitle" data-i18n="brand.subtitle">Grounded theory workspace</div>
+      <aside id="settingsPanel" class="sidebar" aria-label="Analysis settings" data-i18n-aria-label="aria.settings">
+        <div class="sidebar-head">
+          <div class="brand-block">
+            <img class="brand-mark" src="/static/gtflow-icon.png" alt="" aria-hidden="true" />
+            <div>
+              <div class="brand-title">GTFlow</div>
+              <div class="brand-subtitle" data-i18n="brand.subtitle">Grounded theory workspace</div>
+            </div>
           </div>
+          <button id="settingsClose" class="drawer-close" type="button" aria-label="Close settings" data-i18n-aria-label="aria.closeSettings"><span aria-hidden="true">×</span></button>
         </div>
 
         <details class="side-section side-details" open>
           <summary class="section-label" data-i18n="section.connection">Connection</summary>
-          <label data-i18n="label.provider">Provider</label>
-          <select id="providerName">
+          <label for="providerName" data-i18n="label.provider">Provider</label>
+          <select id="providerName" aria-describedby="providerDataNotice">
             <option value="openai_compatible">OpenAI compatible</option>
+            <option value="ollama">Ollama (local)</option>
             <option value="azure_openai">Azure OpenAI</option>
             <option value="anthropic">Anthropic</option>
           </select>
-          <label data-i18n="label.model">Model</label>
+          <label for="model" data-i18n="label.model">Model</label>
           <input id="model" value="gpt-4o-mini" />
-          <label data-i18n="label.apiKey">API key</label>
-          <input id="apiKey" type="password" placeholder="Use env var or paste key" data-i18n-placeholder="placeholder.apiKey" />
+          <label for="apiKey" data-i18n="label.apiKey">API key</label>
+          <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Use env var or paste key" data-i18n-placeholder="placeholder.apiKey" />
+          <p id="providerDataNotice" class="privacy-note" data-i18n="privacy.providerTransfer">Running analysis sends source text and generated context to the selected provider. Preview is processed only by this local server and never includes your API key.</p>
+          <p id="providerHostNotice" class="endpoint-note" role="status" aria-live="polite"></p>
           <div id="openaiFields">
-            <label data-i18n="label.baseUrl">Base URL</label>
+            <label for="baseUrl" data-i18n="label.baseUrl">Base URL</label>
             <input id="baseUrl" value="https://api.openai.com/v1" />
-            <label data-i18n="label.organization">Organization</label>
+            <label for="organization" data-i18n="label.organization">Organization</label>
             <input id="organization" placeholder="Optional org id" data-i18n-placeholder="placeholder.organization" />
-            <label class="check-field">
+            <label class="check-field" for="useResponses">
               <input id="useResponses" type="checkbox" />
               <span data-i18n="label.useResponses">Use Responses API when supported</span>
             </label>
           </div>
           <div id="azureFields" class="hidden">
-            <label data-i18n="label.endpoint">Endpoint</label>
+            <label for="azureEndpoint" data-i18n="label.endpoint">Endpoint</label>
             <input id="azureEndpoint" placeholder="https://resource.openai.azure.com" data-i18n-placeholder="placeholder.azureEndpoint" />
-            <label data-i18n="label.deployment">Deployment</label>
+            <label for="azureDeployment" data-i18n="label.deployment">Deployment</label>
             <input id="azureDeployment" placeholder="deployment name" data-i18n-placeholder="placeholder.azureDeployment" />
-            <label data-i18n="label.apiVersion">API version</label>
+            <label for="apiVersion" data-i18n="label.apiVersion">API version</label>
             <input id="apiVersion" value="2024-02-15-preview" />
           </div>
-          <label data-i18n="label.outputLanguage">Language</label>
+          <label for="outputLanguage" data-i18n="label.outputLanguage">Language</label>
           <select id="outputLanguage">
             <option value="English">English</option>
             <option value="Chinese">简体中文</option>
@@ -64,15 +72,15 @@
             <summary data-i18n="section.generation">Generation</summary>
             <div class="field-row">
               <div>
-                <label data-i18n="label.temperature">Temperature</label>
+                <label for="temperature" data-i18n="label.temperature">Temperature</label>
                 <input id="temperature" type="number" value="0.2" min="0" max="2" step="0.1" />
               </div>
               <div>
-                <label data-i18n="label.maxTokens">Max tokens</label>
+                <label for="maxTokens" data-i18n="label.maxTokens">Max tokens</label>
                 <input id="maxTokens" type="number" value="1024" min="1" />
               </div>
             </div>
-            <label class="check-field">
+            <label class="check-field" for="structuredOutput">
               <input id="structuredOutput" type="checkbox" checked />
               <span data-i18n="label.structuredOutput">Structured JSON output</span>
             </label>
@@ -81,11 +89,11 @@
             <summary data-i18n="section.costModel">Cost model</summary>
             <div class="field-row">
               <div>
-                <label data-i18n="label.priceIn">Input $/1k</label>
+                <label for="priceIn" data-i18n="label.priceIn">Input $/1k</label>
                 <input id="priceIn" type="number" min="0" step="0.0001" placeholder="Optional" data-i18n-placeholder="placeholder.optional" />
               </div>
               <div>
-                <label data-i18n="label.priceOut">Output $/1k</label>
+                <label for="priceOut" data-i18n="label.priceOut">Output $/1k</label>
                 <input id="priceOut" type="number" min="0" step="0.0001" placeholder="Optional" data-i18n-placeholder="placeholder.optional" />
               </div>
             </div>
@@ -94,7 +102,7 @@
 
         <details class="side-section side-details">
           <summary class="section-label" data-i18n="section.runSetup">Run setup</summary>
-          <label data-i18n="label.segmentation">Segmentation</label>
+          <label for="segmentationStrategy" data-i18n="label.segmentation">Segmentation</label>
           <select id="segmentationStrategy">
             <option value="dialog" data-i18n="option.dialog">Dialog</option>
             <option value="paragraph" data-i18n="option.paragraph">Paragraph</option>
@@ -102,11 +110,11 @@
           </select>
           <div class="field-row">
             <div>
-              <label data-i18n="label.segmentSize">Segment size</label>
+                <label for="maxSegmentChars" data-i18n="label.segmentSize">Segment size</label>
               <input id="maxSegmentChars" type="number" value="800" min="100" />
             </div>
             <div>
-              <label data-i18n="label.batch">Batch</label>
+                <label for="batchSize" data-i18n="label.batch">Batch</label>
               <input id="batchSize" type="number" value="10" min="1" />
             </div>
           </div>
@@ -114,54 +122,62 @@
             <summary data-i18n="section.throughput">Throughput</summary>
             <div class="field-row">
               <div>
-                <label data-i18n="label.workers">Workers</label>
+                <label for="concurrentWorkers" data-i18n="label.workers">Workers</label>
                 <input id="concurrentWorkers" type="number" value="6" min="1" />
               </div>
               <div>
-                <label data-i18n="label.rateSec">Rate/sec</label>
+                <label for="rateLimitRps" data-i18n="label.rateSec">Rate/sec</label>
                 <input id="rateLimitRps" type="number" value="2" min="0" step="0.1" />
               </div>
             </div>
             <div class="field-row">
               <div>
-                <label data-i18n="label.timeoutSec">Timeout sec</label>
+                <label for="timeoutSec" data-i18n="label.timeoutSec">Timeout sec</label>
                 <input id="timeoutSec" type="number" value="60" min="1" />
               </div>
               <div>
-                <label data-i18n="label.streamAt">Stream at</label>
+                <label for="streamThreshold" data-i18n="label.streamAt">Stream at</label>
                 <input id="streamThreshold" type="number" value="2000" min="1" />
               </div>
             </div>
-            <label class="check-field">
+            <label class="check-field" for="streamOpenCoding">
               <input id="streamOpenCoding" type="checkbox" />
               <span data-i18n="label.streamOpenCoding">Stream open coding for large runs</span>
             </label>
           </details>
           <details>
             <summary data-i18n="section.advancedLimits">Advanced limits</summary>
-            <label data-i18n="label.promptChars">Prompt chars</label>
+            <label for="maxPromptChars" data-i18n="label.promptChars">Prompt chars</label>
             <input id="maxPromptChars" type="number" value="200000" min="2000" />
-            <label data-i18n="label.retryAttempts">Retry attempts</label>
+            <label for="retryMax" data-i18n="label.retryAttempts">Retry attempts</label>
             <input id="retryMax" type="number" value="3" min="0" max="5" />
           </details>
         </details>
       </aside>
 
-      <main class="workspace">
+      <main id="mainContent" class="workspace" tabindex="-1">
         <header class="topbar">
           <div class="topbar-copy">
             <div class="eyebrow" data-i18n="top.eyebrow">GTFlow studio</div>
             <h1 data-i18n="top.title">Qualitative evidence into theory.</h1>
           </div>
+          <div class="topbar-actions">
+            <span id="phaseBadge" class="phase-badge" role="status" aria-live="polite">Empty</span>
+            <div class="local-status" title="The interface and preview run on this device" data-i18n-title="title.localWorkspace">
+              <span aria-hidden="true"></span><span data-i18n="status.localWorkspace">Local workspace</span>
+            </div>
+            <button id="settingsToggle" class="settings-toggle" type="button" aria-controls="settingsPanel" aria-expanded="false" data-i18n="button.settings">Settings</button>
+          </div>
         </header>
 
-        <section class="stage-strip" aria-label="Analysis workflow" data-i18n-aria-label="aria.workflow">
-          <div class="stage active"><span>01</span><b data-i18n="stage.source">Source</b><small data-i18n="stage.sourceSub">Paste or upload</small></div>
-          <div class="stage" id="providerStep"><span>02</span><b data-i18n="stage.provider">Provider</b><small data-i18n="stage.providerSub">Model and key</small></div>
-          <div class="stage" id="runStep"><span>03</span><b data-i18n="stage.run">Run</b><small data-i18n="stage.runSub">Pipeline</small></div>
-          <div class="stage"><span>04</span><b data-i18n="stage.review">Review</b><small data-i18n="stage.reviewSub">Gioia and contrasts</small></div>
-          <div class="stage"><span>05</span><b data-i18n="stage.export">Export</b><small data-i18n="stage.exportSub">ZIP bundle</small></div>
-        </section>
+        <ol class="stage-strip" aria-label="Analysis workflow" data-i18n-aria-label="aria.workflow">
+          <li class="stage active" id="sourceStep"><span>01</span><b data-i18n="stage.source">Source</b><small data-i18n="stage.sourceSub">Paste or upload</small></li>
+          <li class="stage" id="providerStep"><span>02</span><b data-i18n="stage.provider">Provider</b><small data-i18n="stage.providerSub">Model and key</small></li>
+          <li class="stage" id="runStep"><span>03</span><b data-i18n="stage.run">Run</b><small data-i18n="stage.runSub">Pipeline</small></li>
+          <li class="stage" id="reviewStep"><span>04</span><b data-i18n="stage.review">Review</b><small data-i18n="stage.reviewSub">Gioia and contrasts</small></li>
+          <li class="stage" id="exportStep"><span>05</span><b data-i18n="stage.export">Export</b><small data-i18n="stage.exportSub">ZIP bundle</small></li>
+        </ol>
+        <p id="workflowStatus" class="visually-hidden" role="status" aria-live="polite"></p>
 
         <section class="source-grid">
           <div id="sourcePanel" class="panel source-panel">
@@ -171,7 +187,7 @@
                 <p data-i18n="source.copy">Paste text or load .txt, .md, .csv, or .jsonl.</p>
               </div>
               <div class="button-row">
-                <button id="clearText" class="ghost" data-i18n="button.clear">Clear</button>
+                <button id="clearText" class="ghost" type="button" data-i18n="button.clear">Clear</button>
               </div>
             </div>
             <div id="dropZone" class="drop-zone" role="button" tabindex="0" aria-label="Choose or drop a source file" aria-describedby="fileStatus" data-i18n-aria-label="aria.dropZone">
@@ -189,19 +205,22 @@
                 <span data-i18n="source.dropOverlayCopy">.txt, .md, .csv, or .jsonl</span>
               </div>
             </div>
-            <textarea id="inputText" placeholder="Paste interview excerpts, field notes, or uploaded file content here.&#10;&#10;Participant A: ...&#10;Participant B: ..." data-i18n-placeholder="placeholder.inputText"></textarea>
+            <label for="inputText" class="visually-hidden" data-i18n="label.sourceText">Source text</label>
+            <textarea id="inputText" aria-describedby="sourceInputHint" placeholder="Paste interview excerpts, field notes, or uploaded file content here.&#10;&#10;Participant A: ...&#10;Participant B: ..." data-i18n-placeholder="placeholder.inputText"></textarea>
             <div class="runbar">
-              <button id="runButton" class="primary" disabled data-i18n="button.run">Run analysis</button>
-              <div id="runHelp" class="hint" aria-live="polite" data-i18n="runHelp.initial">Add source text and provider settings to begin.</div>
+              <button id="runButton" class="primary" type="button" disabled aria-describedby="runHelp" data-i18n="button.run">Run analysis</button>
+              <div id="runHelp" class="hint" role="status" aria-live="polite" data-i18n="runHelp.initial">Add source text and provider settings to begin.</div>
             </div>
+            <span id="sourceInputHint" class="visually-hidden" data-i18n="privacy.sourceOnRun">Source text is sent to the configured provider only after you choose Run analysis.</span>
           </div>
 
-          <div class="panel preview-panel">
+          <div id="previewPanel" class="panel preview-panel" aria-busy="false">
             <div class="panel-head compact">
               <div>
                 <h2 data-i18n="preview.title">Preview</h2>
                 <p data-i18n="preview.copy">Segments and readiness update as you work.</p>
               </div>
+              <p id="previewCount" class="preview-count" role="status" aria-live="polite"></p>
             </div>
             <div class="metric-grid">
               <div class="metric"><span data-i18n="metric.segments">Segments</span><b id="metricSegments">0</b></div>
@@ -213,18 +232,19 @@
               <div id="providerCheck" class="check-item"><span></span><div><b data-i18n="stage.provider">Provider</b><small data-i18n="check.providerPending">Add model and API settings.</small></div></div>
               <div id="runCheck" class="check-item"><span></span><div><b data-i18n="stage.run">Run</b><small data-i18n="check.runPending">Waiting for a complete setup.</small></div></div>
             </div>
-            <div id="previewList" class="preview-list empty" data-i18n="preview.empty">No segments yet.</div>
+            <div id="previewList" class="preview-list empty" role="region" aria-label="Segmentation preview" aria-live="polite" data-i18n="preview.empty" data-i18n-aria-label="aria.preview">No segments yet.</div>
           </div>
         </section>
 
-        <section id="progressPanel" class="panel progress-panel hidden">
+        <section id="progressPanel" class="panel progress-panel hidden" aria-labelledby="progressTitle" aria-describedby="progressCopy" aria-live="polite" aria-busy="false">
           <div class="panel-head compact">
             <div>
               <h2 id="progressTitle" data-i18n="progress.running">Running analysis</h2>
-              <p id="progressCopy" aria-live="polite" data-i18n="progress.runningCopy">This can take a few minutes depending on provider latency.</p>
+               <p id="progressCopy" data-i18n="progress.runningCopy">This can take a few minutes depending on provider latency.</p>
             </div>
+            <button id="cancelRun" class="ghost" type="button" data-i18n="button.cancelRun" hidden>Cancel</button>
           </div>
-          <div class="progress-track"><div id="progressBar"></div></div>
+          <div id="progressTrack" class="progress-track" role="progressbar" aria-labelledby="progressTitle" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progressBar"></div></div>
         </section>
 
         <section id="resultsPanel" class="results hidden">
@@ -234,26 +254,26 @@
               <h2 id="coreCategory" data-i18n="results.coreCategory">Core category</h2>
               <p id="storyline"></p>
             </div>
-            <button id="downloadZip" class="primary" data-i18n="button.downloadZip">Download ZIP</button>
+            <button id="downloadZip" class="primary" type="button" data-i18n="button.downloadZip">Download ZIP</button>
           </div>
 
           <div id="statCards" class="metric-grid wide"></div>
 
           <nav class="tabs" role="tablist" aria-label="Result views" data-i18n-aria-label="aria.resultViews">
-            <button class="tab active" data-tab="overview" role="tab" aria-selected="true" data-i18n="tab.overview">Overview</button>
-            <button class="tab" data-tab="gioia" role="tab" aria-selected="false" data-i18n="tab.gioia">Gioia</button>
-            <button class="tab" data-tab="contrasts" role="tab" aria-selected="false" data-i18n="tab.contrasts">Contrasts</button>
-            <button class="tab" data-tab="negatives" role="tab" aria-selected="false" data-i18n="tab.negatives">Negatives</button>
-            <button class="tab" data-tab="saturation" role="tab" aria-selected="false" data-i18n="tab.saturation">Saturation</button>
-            <button class="tab" data-tab="data" role="tab" aria-selected="false" data-i18n="tab.data">Data</button>
+            <button id="result-tab-overview" class="tab active" type="button" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview" tabindex="0" data-i18n="tab.overview">Overview</button>
+            <button id="result-tab-gioia" class="tab" type="button" data-tab="gioia" role="tab" aria-selected="false" aria-controls="tab-gioia" tabindex="-1" data-i18n="tab.gioia">Gioia</button>
+            <button id="result-tab-contrasts" class="tab" type="button" data-tab="contrasts" role="tab" aria-selected="false" aria-controls="tab-contrasts" tabindex="-1" data-i18n="tab.contrasts">Contrasts</button>
+            <button id="result-tab-negatives" class="tab" type="button" data-tab="negatives" role="tab" aria-selected="false" aria-controls="tab-negatives" tabindex="-1" data-i18n="tab.negatives">Negatives</button>
+            <button id="result-tab-saturation" class="tab" type="button" data-tab="saturation" role="tab" aria-selected="false" aria-controls="tab-saturation" tabindex="-1" data-i18n="tab.saturation">Saturation</button>
+            <button id="result-tab-data" class="tab" type="button" data-tab="data" role="tab" aria-selected="false" aria-controls="tab-data" tabindex="-1" data-i18n="tab.data">Data</button>
           </nav>
 
-          <div id="tab-overview" class="tab-panel active" role="tabpanel"></div>
-          <div id="tab-gioia" class="tab-panel" role="tabpanel"></div>
-          <div id="tab-contrasts" class="tab-panel" role="tabpanel"></div>
-          <div id="tab-negatives" class="tab-panel" role="tabpanel"></div>
-          <div id="tab-saturation" class="tab-panel" role="tabpanel"></div>
-          <div id="tab-data" class="tab-panel" role="tabpanel"></div>
+          <div id="tab-overview" class="tab-panel active" role="tabpanel" aria-labelledby="result-tab-overview" tabindex="0"></div>
+          <div id="tab-gioia" class="tab-panel" role="tabpanel" aria-labelledby="result-tab-gioia" tabindex="0" hidden></div>
+          <div id="tab-contrasts" class="tab-panel" role="tabpanel" aria-labelledby="result-tab-contrasts" tabindex="0" hidden></div>
+          <div id="tab-negatives" class="tab-panel" role="tabpanel" aria-labelledby="result-tab-negatives" tabindex="0" hidden></div>
+          <div id="tab-saturation" class="tab-panel" role="tabpanel" aria-labelledby="result-tab-saturation" tabindex="0" hidden></div>
+          <div id="tab-data" class="tab-panel" role="tabpanel" aria-labelledby="result-tab-data" tabindex="0" hidden></div>
         </section>
       </main>
     </div>
