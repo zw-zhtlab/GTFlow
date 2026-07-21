@@ -19,8 +19,6 @@ HTML = """
 <head>
 <meta charset="utf-8"/>
 <title>GTFlow Report</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-<script>mermaid.initialize({ startOnLoad: true });</script>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, "Microsoft YaHei", sans-serif; margin: 0; color: #222; background: #fff; }
 main { max-width: 1180px; margin: 0 auto; padding: 28px; }
@@ -56,20 +54,43 @@ pre { background: #f6f8fa; padding: 12px; overflow: auto; border: 1px solid #ddd
 <tr><td>Codebook entries</td><td>{{ stats.get("codebook_entries", 0) }}</td></tr>
 <tr><td>Axial triples</td><td>{{ stats.get("triples", 0) }}</td></tr>
 </table>
+<h3>Provenance</h3>
+<pre>{{ quality.get("provenance", {}) | tojson(indent=2) }}</pre>
+<h3>Run Metadata</h3>
+<pre>{{ run_meta | tojson(indent=2) }}</pre>
 {% endif %}
 
 {% if sections.results %}
 <h2>Results</h2>
+<h3>Grounded Theory</h3>
+<table>
+<tr><th>Core category</th><td>{{ theory.get("core_category", "") }}</td></tr>
+<tr><th>Rationale</th><td>{{ theory.get("rationale", "") or "" }}</td></tr>
+<tr><th>Storyline</th><td>{{ theory.get("storyline", "") }}</td></tr>
+</table>
+
+<h3>Quality Audit</h3>
+<p>Overall quality score: <b>{{ quality.get("overall", {}).get("score", "not computed") }}</b></p>
+<pre>{{ quality | tojson(indent=2) }}</pre>
+
+<h3>Limitations</h3>
+{% set limitations = quality.get("limitations", []) %}
+{% if limitations %}
+<ul>{% for limitation in limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>
+{% else %}
+<p class="muted">No automated limitations record was supplied. Interpretive validity still requires researcher review.</p>
+{% endif %}
+
 <h3>Gioia View</h3>
 <pre>{{ gioia | tojson(indent=2) }}</pre>
 
 <h3>Axial Triples</h3>
-<div class="mermaid">
-flowchart TD
+<table>
+<tr><th>Condition</th><th>Action</th><th>Result</th><th>Evidence IDs</th></tr>
 {% for t in triples %}
-  A{{ loop.index }}["{{ t.condition }}"] --> B{{ loop.index }}["{{ t.action }}"] --> C{{ loop.index }}["{{ t.result }}"]
+<tr><td>{{ t.condition }}</td><td>{{ t.action }}</td><td>{{ t.result }}</td><td>{{ t.evidence | join(', ') }}</td></tr>
 {% endfor %}
-</div>
+</table>
 
 <h3>Code Frequencies</h3>
 <table>
@@ -122,6 +143,9 @@ flowchart TD
 <tr><td>{{ e.code }}</td><td>{{ e.definition }}</td><td>{{ e.aliases | join(', ') }}</td></tr>
 {% endfor %}
 </table>
+
+<h3>Evidence Catalog</h3>
+<pre>{{ evidence_catalog | tojson(indent=2) }}</pre>
 {% endif %}
 </main>
 </body>
@@ -142,6 +166,10 @@ def emit_html(
     saturation_metrics: Optional[Dict[str, Any]] = None,
     template_path: Optional[str] = None,
     sections: Optional[Dict[str, bool]] = None,
+    theory: Optional[Any] = None,
+    quality: Optional[Dict[str, Any]] = None,
+    run_meta: Optional[Dict[str, Any]] = None,
+    evidence_catalog: Optional[Dict[str, Any]] = None,
 ) -> None:
     sanitized_triples = [_sanitize_mermaid_fields(t) for t in triples]
     context = {
@@ -152,6 +180,10 @@ def emit_html(
         "codebook": codebook,
         "analytics": analytics or {},
         "saturation_metrics": saturation_metrics or {},
+        "theory": _model_or_dict(theory),
+        "quality": quality or {},
+        "run_meta": run_meta or {},
+        "evidence_catalog": evidence_catalog or {},
         "sections": {**DEFAULT_SECTIONS, **(sections or {})},
     }
     html = _load_template(template_path).render(**context)
@@ -176,3 +208,13 @@ def _sanitize_mermaid_fields(triple: Dict[str, Any]) -> Dict[str, Any]:
         "action": _clean(triple.get("action", "")),
         "result": _clean(triple.get("result", "")),
     }
+
+
+def _model_or_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return {}

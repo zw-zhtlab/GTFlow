@@ -7,7 +7,7 @@ GTFlow includes a browser UI and a CLI. The browser UI is a lightweight local we
 ## Highlights
 
 - End-to-end grounded theory pipeline: segmentation, open coding, codebook building, Gioia alignment, axial coding, selective coding, negative cases, saturation, analytics, and report generation.
-- Local web UI for interactive analysis, file upload, preview, batch runs, Gioia editing, result review, and ZIP export.
+- Local web UI for interactive analysis, race-safe preview, cancellable background jobs, Gioia editing, result review, and ZIP export.
 - CLI for reproducible scripted runs and project automation.
 - Provider support for OpenAI-compatible APIs, Azure OpenAI, Anthropic, OpenAI, and Ollama-style `/v1` endpoints.
 - Structured inputs: `.txt`, `.md`, `.csv`, and `.jsonl`.
@@ -33,18 +33,23 @@ Graphviz enables graph output in reports.
 
 ```bash
 gtflow-ui
+# Or, when running directly from a source checkout:
+python -m gtflow.gui.launcher
 ```
 
-Open the printed local URL in your browser. The default port is `8501`; GTFlow automatically selects the next available port when `8501` is busy.
+Open the printed local URL in your browser. The default host is loopback-only and the default port is `8501`; GTFlow automatically selects the next available port when `8501` is busy.
 
 The UI workflow:
 
 1. Configure provider, model, API key, generation settings, and run limits.
 2. Paste source text or upload `.txt`, `.md`, `.csv`, or `.jsonl`.
 3. Review segmentation preview and readiness.
-4. Run analysis.
-5. Review overview, Gioia alignment, contrasts, negative cases, saturation, and raw data.
-6. Download the ZIP bundle with artifacts and the HTML report.
+4. Run analysis and follow real stage progress; cancellation is cooperative at safe stage boundaries.
+5. Review overview, Gioia alignment, contrasts, negative cases, code-novelty saturation, and raw data.
+6. Save Gioia edits (with undo) to rebuild the quality audit, report, and ZIP bundle.
+7. Download the ZIP bundle from its dedicated local endpoint.
+
+The interface exposes explicit `empty`, `configured`, `ready`, `queued`, `running-stage`, `succeeded`, `failed`, `edited`, and `exported` states. A failed run keeps the previous successful result available. On screens below 920 px, settings move into a keyboard-accessible drawer instead of being stacked above the workspace. The static HTML/CSS/JS frontend uses system fonts, neutral layered surfaces, restrained blue accents, 44 px controls, visible focus rings, and reduced-motion support without a frontend framework or CDN.
 
 ### CLI
 
@@ -96,6 +101,43 @@ export AZURE_OPENAI_API_VERSION=2024-02-15-preview
 ```bash
 export ANTHROPIC_API_KEY=...
 ```
+
+## Data and provider boundary
+
+The browser interface and segmentation preview are served by the local GTFlow
+process. Preview requests never include the API key and do not call a model
+provider. When you choose **Run analysis**, GTFlow sends source excerpts and
+the generated analysis context to the provider endpoint you configured. That
+endpoint may be a remote third party, an organizational gateway, or a local
+service such as Ollama; its own retention and privacy terms apply. Output files
+remain local unless you move or share them.
+
+For sensitive studies, use an approved endpoint, avoid pasting secrets into
+source text, and verify your provider's data-handling policy before running.
+
+API keys are held only for the active request or job: they are excluded from UI
+preference storage, exported configuration, and preview requests. Non-sensitive
+interface preferences may be stored in the browser. The provider destination is
+shown before a run so a local Ollama endpoint is distinguishable from a remote
+cloud or gateway host.
+
+## Local web security model
+
+GTFlow's web service is designed for one local researcher, not as a public or
+multi-tenant server. It binds to loopback by default and enforces:
+
+- same-origin `Host`/`Origin` checks and a per-process `X-GTFlow-CSRF` token for mutations;
+- JSON content-type validation, a 4 MiB request limit, bounded JSON depth/node counts, socket timeouts, and structured errors;
+- containment checks for static file paths, including Windows absolute, UNC, encoded traversal, and drive-path cases;
+- CSP, `nosniff`, and related response headers;
+- one expensive analysis at a time, a bounded in-memory job registry, unguessable job IDs, and expiring completed jobs;
+- credential isolation: a request-selected OpenAI-compatible base URL or Azure endpoint cannot inherit a process environment API key.
+
+Background job state and bundles stay in process memory and disappear when the
+server stops. Read-only job status uses an unguessable local job ID; create,
+cancel, and edit operations also require the same-origin CSRF boundary. Do not
+bind GTFlow to a LAN or public interface unless you add an appropriate trusted
+reverse proxy and access-control layer yourself.
 
 ## Configuration
 
@@ -213,10 +255,41 @@ The full pipeline writes a structured project directory:
 - `saturation.json`
 - `saturation_metrics.json`
 - `analytics.json`
+- `evidence_catalog.json` (canonical source text, source order, and linked open-code provenance)
+- `quality.json` (cross-artifact coverage, verbatim, reference-validity, and limitation audit)
 - `report.html`
 - `run_meta.json`
+- `stage_manifest.json` (CLI stage signatures, status, counts, and artifact hashes)
+
+`merge-projects` additionally writes `project_manifest.json` and `merge_meta.json`.
 
 `run_meta.json` stores per-stage token usage. Cost is estimated only when both model price fields are set.
+
+`stage_manifest.json` makes CLI resume decisions auditable. It records the input
+SHA-256, a secret-free normalized configuration, provider/model, prompt and
+schema fingerprints, upstream artifact hashes, `running`/`complete`/`failed`
+state, output hashes, and stage counts. A cache entry is reused only when its
+signature and every declared output hash still match. Input, model, prompt, or
+upstream provenance changes invalidate the affected stage and all dependent
+stages—even if a changed prompt happens to produce byte-identical output.
+
+Interrupted streamed JSONL is never marked complete. Before rerunning open
+coding, GTFlow removes both possible open-code formats; a non-streamed run cannot
+be shadowed by an older `open_codes.jsonl`. The manifest declares which format
+is canonical.
+
+Provider retries are owned by GTFlow rather than nested SDK retry loops. The
+policy stops on permanent errors, retries bounded transient failures, honors
+`Retry-After`, adds jittered backoff, and records secret-free per-attempt
+telemetry in `run_meta.json`.
+
+Every source segment now produces an open-coding record. Exhausted parse or validation retries are preserved with `status: "failed"` and `validation_errors` rather than appearing as empty successful coding. Axial and negative-case evidence IDs are checked against `evidence_catalog.json`; rejected IDs remain visible in audit metadata. The generated HTML report is self-contained and includes the theory rationale, provenance, quality audit, and limitations without loading third-party scripts. Saturation output is deliberately labeled as a code-novelty diagnostic; incomplete windows and failed coding records cannot create an early, misleading saturation claim.
+
+Project merges validate manifest hashes and segment references before writing.
+Each source project has a stable ID, so two directories both named `output` get
+different prefixes. Merged outputs include `project_manifest.json` with source
+IDs and artifact hashes; orphan open-code, axial-evidence, or negative-case IDs
+cause the merge to fail rather than being silently rewritten.
 
 ## Analysis Views
 
@@ -265,21 +338,13 @@ gtflow report -o output --no-appendices
 
 ```bash
 docker build -t gtflow .
-docker run --rm -p 8501:8501 \
+docker run --rm -p 127.0.0.1:8501:8501 \
   -e OPENAI_API_KEY=YOUR_OPENAI_API_KEY \
   -e OPENAI_BASE_URL=https://api.openai.com/v1 \
   gtflow
 ```
 
 Open `http://127.0.0.1:8501`.
-
-## Development Checks
-
-```bash
-python -m compileall -q gtflow
-gtflow --help
-python -m gtflow.gui.launcher --help
-```
 
 ## License
 

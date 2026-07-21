@@ -29,6 +29,16 @@ pip-delete-this-directory.txt
 .coverage.*
 htmlcov/
 .cache/
+.playwright-cli/
+
+# Local development artifacts
+/tests/
+/.local_tests/
+/.codex_smoke/
+/.arbor/
+/tools/
+test_*.py
+*_test.py
 
 # IDE / editor
 .idea/

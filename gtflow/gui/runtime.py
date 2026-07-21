@@ -7,7 +7,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional
 
 from gtflow.config import AppConfig, ProviderConfig
@@ -16,9 +16,11 @@ from gtflow.models.schemas import AxialTriple, Codebook, OpenCodingItem, Segment
 from gtflow.pipeline.analytics import build_analysis_bundle
 from gtflow.pipeline.axial_coder import build_axial
 from gtflow.pipeline.codebook_builder import build_codebook
+from gtflow.pipeline.evidence import build_evidence_catalog
 from gtflow.pipeline.gioia_view import to_gioia
 from gtflow.pipeline.negatives_scanner import scan_negatives
 from gtflow.pipeline.open_coder import run_open_coding, run_open_coding_streaming
+from gtflow.pipeline.quality import build_quality_audit
 from gtflow.pipeline.report_html import emit_html
 from gtflow.pipeline.saturation import saturation_suite
 from gtflow.pipeline.segmenter import segment_dialog, segment_line, segment_paragraph
@@ -30,6 +32,7 @@ from gtflow.utils.jsonl_utils import iter_jsonl
 
 
 SENSITIVE_HEADER_TOKENS = (
+    "auth",
     "key",
     "token",
     "secret",
@@ -37,6 +40,8 @@ SENSITIVE_HEADER_TOKENS = (
     "cookie",
     "credential",
     "password",
+    "session",
+    "signature",
 )
 
 
@@ -52,6 +57,10 @@ class PipelineArtifacts:
     saturation_metrics: Dict[str, Any]
     analytics: Dict[str, Any]
     run_meta: Dict[str, Any]
+    # Defaults keep older local integrations able to construct artifacts while
+    # current pipeline runs always populate both audit payloads explicitly.
+    evidence_catalog: Dict[str, Any] = field(default_factory=dict)
+    quality: Dict[str, Any] = field(default_factory=dict)
 
 
 def default_config() -> AppConfig:
@@ -214,17 +223,28 @@ def _coerce_record_meta(meta_value: Any) -> Dict[str, str]:
     return {"meta": str(meta_value)}
 
 
-def readiness_state(conf: AppConfig, text: str, source_name: str = "") -> Dict[str, Any]:
+def readiness_state(
+    conf: AppConfig,
+    text: str,
+    source_name: str = "",
+    *,
+    credential_configured: bool = False,
+) -> Dict[str, Any]:
     provider = conf.provider
     has_input = bool(text.strip())
     has_model = bool((provider.model or "").strip())
     provider_name = (provider.name or "").lower()
     needs_key = provider_name in ("openai_compatible", "openai", "azure_openai", "anthropic")
-    has_key = bool(provider.api_key)
+    # Preview requests deliberately omit the credential.  The UI sends only a
+    # boolean hint so readiness can still be accurate without echoing secrets
+    # through a high-frequency endpoint.
+    has_key = bool(provider.api_key) or credential_configured
     if provider_name in ("openai_compatible", "openai"):
-        has_key = has_key or bool(os.getenv("OPENAI_API_KEY"))
+        # Environment credentials are only eligible when routing also comes from
+        # trusted defaults/environment. A request-selected endpoint needs its own key.
+        has_key = has_key or (not provider.base_url and bool(os.getenv("OPENAI_API_KEY")))
     elif provider_name == "azure_openai":
-        has_key = has_key or bool(os.getenv("AZURE_OPENAI_API_KEY"))
+        has_key = has_key or (not provider.endpoint and bool(os.getenv("AZURE_OPENAI_API_KEY")))
         has_endpoint = bool(provider.endpoint or os.getenv("AZURE_OPENAI_ENDPOINT"))
         has_deployment = bool(provider.deployment or os.getenv("AZURE_OPENAI_DEPLOYMENT"))
         has_key = has_key and has_endpoint and has_deployment
@@ -251,7 +271,7 @@ def report_stats(artifacts: PipelineArtifacts) -> Dict[str, int]:
     }
 
 
-def build_run_meta(conf: AppConfig, totals: Dict[str, int]) -> Dict[str, Dict[str, Any]]:
+def build_run_meta(conf: AppConfig, totals: Dict[str, int]) -> Dict[str, Any]:
     price_in = conf.provider.price_input_per_1k
     price_out = conf.provider.price_output_per_1k
     cost = estimate_cost(
@@ -274,6 +294,7 @@ def run_pipeline(
     text: str,
     progress: Optional[Callable[[int, str], None]] = None,
     source_name: str = "",
+    cancel_event: Optional[Any] = None,
 ) -> PipelineArtifacts:
     def tick(value: int, label: str) -> None:
         if progress:
@@ -285,6 +306,8 @@ def run_pipeline(
 
     provider = make_provider(conf.provider)
     provider.reset_usage_totals()
+    if cancel_event is not None:
+        provider.cancel_event = cancel_event
     rate_limiter = TokenBucket(conf.run.rate_limit_rps) if conf.run.rate_limit_rps else None
 
     tick(20, "Open coding")
@@ -320,6 +343,8 @@ def run_pipeline(
             output_language=conf.provider.output_language,
         )
 
+    evidence_catalog = build_evidence_catalog(segments, open_items)
+
     tick(40, "Building codebook")
     codebook = build_codebook(
         provider,
@@ -338,6 +363,7 @@ def run_pipeline(
         rate_limiter=rate_limiter,
         max_retries=conf.run.retry_max,
         output_language=conf.provider.output_language,
+        evidence_catalog=evidence_catalog,
     )
 
     tick(75, "Selective coding")
@@ -348,9 +374,11 @@ def run_pipeline(
         rate_limiter=rate_limiter,
         max_retries=conf.run.retry_max,
         output_language=conf.provider.output_language,
+        evidence_catalog=evidence_catalog,
     )
 
     tick(88, "Negative cases and saturation")
+    validation_events: List[Dict[str, Any]] = []
     negatives = scan_negatives(
         provider,
         segment_dicts,
@@ -359,10 +387,20 @@ def run_pipeline(
         rate_limiter=rate_limiter,
         max_retries=conf.run.retry_max,
         output_language=conf.provider.output_language,
+        audit_log=validation_events,
     )
     sat_metrics = saturation_suite([item.model_dump() for item in open_items])
     analytics = build_analysis_bundle(segments, open_items, negatives)
+    quality = build_quality_audit(
+        segments,
+        open_items,
+        codebook,
+        triples,
+        negatives,
+        validation_events=validation_events,
+    )
     run_meta = build_run_meta(conf, provider.total_usage())
+    run_meta["attempts"] = provider.attempt_telemetry()
 
     tick(100, "Complete")
     return PipelineArtifacts(
@@ -375,14 +413,14 @@ def run_pipeline(
         saturation=sat_metrics["default"],
         saturation_metrics=sat_metrics,
         analytics=analytics,
+        evidence_catalog=evidence_catalog,
+        quality=quality,
         run_meta=run_meta,
     )
 
 
-def artifacts_response(artifacts: PipelineArtifacts, bundle: bytes) -> Dict[str, Any]:
-    import base64
-
-    return {
+def artifacts_response(artifacts: PipelineArtifacts, bundle: Optional[bytes] = None) -> Dict[str, Any]:
+    response = {
         "stats": report_stats(artifacts),
         "segments": [segment.model_dump() for segment in artifacts.segments[:300]],
         "open_items": [item.model_dump() for item in artifacts.open_items[:300]],
@@ -393,10 +431,30 @@ def artifacts_response(artifacts: PipelineArtifacts, bundle: bytes) -> Dict[str,
         "saturation": artifacts.saturation,
         "saturation_metrics": artifacts.saturation_metrics,
         "analytics": artifacts.analytics,
+        "evidence_catalog": artifacts.evidence_catalog,
+        "quality": artifacts.quality,
         "run_meta": artifacts.run_meta,
         "gioia": to_gioia(artifacts.codebook),
-        "bundle_base64": base64.b64encode(bundle).decode("ascii"),
     }
+    if bundle is not None:
+        import base64
+
+        response["bundle_base64"] = base64.b64encode(bundle).decode("ascii")
+    return response
+
+
+def rebuild_artifacts_with_codebook(artifacts: PipelineArtifacts, codebook: Codebook) -> PipelineArtifacts:
+    """Replace an edited codebook and refresh deterministic audit fields."""
+
+    quality = build_quality_audit(
+        artifacts.segments,
+        artifacts.open_items,
+        codebook,
+        artifacts.triples,
+        artifacts.negatives,
+        validation_events=artifacts.quality.get("validation_events", []),
+    )
+    return replace(artifacts, codebook=codebook, quality=quality)
 
 
 def output_bundle(conf: AppConfig, artifacts: PipelineArtifacts) -> bytes:
@@ -413,6 +471,8 @@ def output_bundle(conf: AppConfig, artifacts: PipelineArtifacts) -> bytes:
         write_json(os.path.join(tmpdir, "saturation.json"), artifacts.saturation)
         write_json(os.path.join(tmpdir, "saturation_metrics.json"), artifacts.saturation_metrics)
         write_json(os.path.join(tmpdir, "analytics.json"), artifacts.analytics)
+        write_json(os.path.join(tmpdir, "evidence_catalog.json"), artifacts.evidence_catalog)
+        write_json(os.path.join(tmpdir, "quality.json"), artifacts.quality)
         write_json(os.path.join(tmpdir, "run_meta.json"), artifacts.run_meta)
         emit_html(
             os.path.join(tmpdir, "report.html"),
@@ -423,6 +483,10 @@ def output_bundle(conf: AppConfig, artifacts: PipelineArtifacts) -> bytes:
             artifacts.codebook,
             analytics=artifacts.analytics,
             saturation_metrics=artifacts.saturation_metrics,
+            theory=artifacts.theory,
+            quality=artifacts.quality,
+            run_meta=artifacts.run_meta,
+            evidence_catalog=artifacts.evidence_catalog,
         )
         save_config_snippet(conf, tmpdir)
         return zip_dir(tmpdir)

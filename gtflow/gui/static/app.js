@@ -1,13 +1,64 @@
 const state = {
   previewTimer: null,
+  previewRequest: null,
+  previewSequence: 0,
   lastResult: null,
   editedCodebook: null,
   sourceName: null,
   sourceSize: null,
   dragDepth: 0,
+  csrfToken: null,
+  csrfRequest: null,
+  workflowState: "empty",
+  lastReadiness: { input: false, provider: false, ready: false, segments: 0 },
+  settingsOpen: false,
+  settingsRestoreFocus: null,
+  gioiaDirty: false,
+  codebookHistory: [],
+  lastProvider: null,
+  lastAttemptFingerprint: null,
+  lastSuccessfulFingerprint: null,
+  activeJobId: null,
+  resultJobId: null,
+  bundleDownloadUrl: null,
+  jobPollTimer: null,
+  jobPollController: null,
 };
 
 const $ = (id) => document.getElementById(id);
+
+const WORKFLOW_STATES = new Set([
+  "empty",
+  "configured",
+  "ready",
+  "queued",
+  "running-stage",
+  "succeeded",
+  "failed",
+  "edited",
+  "exported",
+]);
+
+const ACTIVE_RUN_STATES = new Set(["queued", "running-stage"]);
+const SETTINGS_STORAGE_KEY = "gtflow.ui.settings.v1";
+const SAVED_SETTING_IDS = [
+  "providerName",
+  "model",
+  "outputLanguage",
+  "temperature",
+  "maxTokens",
+  "structuredOutput",
+  "segmentationStrategy",
+  "maxSegmentChars",
+  "batchSize",
+  "concurrentWorkers",
+  "rateLimitRps",
+  "timeoutSec",
+  "streamThreshold",
+  "streamOpenCoding",
+  "maxPromptChars",
+  "retryMax",
+];
 
 const LANGUAGE_OPTIONS = [
   { value: "English", label: "English", htmlLang: "en" },
@@ -54,11 +105,18 @@ const TRANSLATIONS = {
     "label.streamOpenCoding": "Stream open coding for large runs",
     "label.promptChars": "Prompt chars",
     "label.retryAttempts": "Retry attempts",
+    "label.sourceText": "Source text",
+    "privacy.providerTransfer": "Running analysis sends source text and generated context to the selected provider. Preview is processed only by this local server and never includes your API key.",
+    "privacy.sourceOnRun": "Source text is sent to the configured provider only after you choose Run analysis.",
+    "privacy.hostRemote": "Run destination: {host} (remote). The API key is kept in memory for this session and is not saved by GTFlow.",
+    "privacy.hostLocal": "Run destination: {host} (local service). Source text does not leave this device unless that service forwards it.",
+    "privacy.hostMissing": "Enter a valid provider endpoint to see where run data will be sent.",
     "option.dialog": "Dialog",
     "option.paragraph": "Paragraph",
     "option.line": "Line",
     "top.eyebrow": "GTFlow studio",
     "top.title": "Qualitative evidence into theory.",
+    "title.localWorkspace": "The interface and preview run on this device",
     "stage.source": "Source",
     "stage.sourceSub": "Paste or upload",
     "stage.provider": "Provider",
@@ -78,6 +136,8 @@ const TRANSLATIONS = {
     "preview.title": "Preview",
     "preview.copy": "Segments and readiness update as you work.",
     "preview.empty": "No segments yet.",
+    "preview.loading": "Updating preview…",
+    "preview.showing": "Showing {shown} of {total}",
     "metric.segments": "Segments",
     "metric.characters": "Characters",
     "metric.avgChars": "Avg chars",
@@ -100,16 +160,42 @@ const TRANSLATIONS = {
     "button.run": "Run analysis",
     "button.running": "Running",
     "button.downloadZip": "Download ZIP",
+    "button.settings": "Settings",
+    "button.cancelRun": "Cancel",
+    "button.cancelling": "Cancelling…",
     "progress.running": "Running analysis",
     "progress.runningCopy": "This can take a few minutes depending on provider latency.",
     "progress.starting": "Starting analysis",
-    "progress.startingCopy": "The model pipeline is running locally through the Python server.",
+    "progress.startingCopy": "GTFlow is preparing the local pipeline. Model requests go to the configured provider.",
     "progress.coding": "Coding segments",
     "progress.codingCopy": "Open coding and codebook generation are in progress.",
     "progress.complete": "Complete",
     "progress.completeCopy": "Artifacts are ready for review and export.",
+    "progress.failed": "Analysis failed",
+    "progress.failedCopy": "The previous successful result is still available. Review the settings and try again.",
+    "progress.stageCopy": "Stage progress: {percent}%",
+    "progress.cancelled": "Analysis cancelled",
+    "progress.cancelledCopy": "No partial result was treated as complete. The previous successful result remains available.",
+    "job.stage.queued": "Queued",
+    "job.stage.starting": "Starting analysis",
+    "job.stage.segmenting": "Segmenting source",
+    "job.stage.open-coding": "Open coding",
+    "job.stage.codebook": "Building codebook",
+    "job.stage.axial-coding": "Axial coding",
+    "job.stage.selective-coding": "Selective coding",
+    "job.stage.validation": "Negative cases and saturation",
+    "job.stage.finalizing": "Finalizing analysis",
+    "job.stage.packaging": "Building audit bundle",
+    "job.stage.complete": "Complete",
+    "job.stage.cancelling": "Cancelling",
+    "job.stage.cancelled": "Cancelled",
     "results.eyebrow": "Analysis output",
     "results.coreCategory": "Core category",
+    "stat.segments": "Segments",
+    "stat.open_codes": "Open codes",
+    "stat.initial_codes": "Initial codes",
+    "stat.codebook_entries": "Codebook entries",
+    "stat.triples": "Triples",
     "tab.overview": "Overview",
     "tab.gioia": "Gioia",
     "tab.contrasts": "Contrasts",
@@ -124,7 +210,24 @@ const TRANSLATIONS = {
     "gioia.theme": "Set second-order theme",
     "gioia.dimension": "Set aggregate dimension",
     "gioia.apply": "Apply batch alignment",
-    "gioia.download": "Download edited codebook",
+    "gioia.save": "Save changes",
+    "gioia.undo": "Undo",
+    "gioia.dirty": "Unsaved edits. Save to rebuild the Gioia view, report, and ZIP bundle.",
+    "gioia.saved": "Edits saved and export artifacts rebuilt.",
+    "gioia.batchStaged": "Batch alignment staged. Review the table, then save changes.",
+    "gioia.undone": "The previous alignment was restored.",
+    "gioia.blankCode": "Every row needs a code before it can be saved.",
+    "gioia.duplicateCode": "Code names must be unique: {code}",
+    "gioia.column.code": "Code",
+    "gioia.column.definition": "Definition",
+    "gioia.column.theme": "Theme",
+    "gioia.column.dimension": "Dimension",
+    "gioia.column.aliases": "Aliases",
+    "gioia.aria.code": "Code, row {row}",
+    "gioia.aria.definition": "Definition, row {row}",
+    "gioia.aria.theme": "Second-order theme, row {row}",
+    "gioia.aria.dimension": "Aggregate dimension, row {row}",
+    "gioia.aria.aliases": "Aliases, row {row}",
     "data.segments": "Segments",
     "data.openCodes": "Open codes",
     "data.codebook": "Codebook",
@@ -132,10 +235,23 @@ const TRANSLATIONS = {
     "chart.empty": "No chart data yet.",
     "toast.previewFailed": "Preview failed",
     "toast.runFailed": "Run failed",
+    "toast.cancelRequested": "Cancellation requested.",
     "toast.batchApplied": "Batch alignment applied.",
+    "toast.gioiaFailed": "Could not save Gioia edits.",
     "toast.firstFile": "Loaded the first dropped file.",
     "toast.readFailed": "Could not read {name}.",
     "status.fileLoaded": "{name} loaded ({size}).",
+    "status.localWorkspace": "Local workspace",
+    "phase.empty": "Empty",
+    "phase.configured": "Configured",
+    "phase.ready": "Ready",
+    "phase.queued": "Queued",
+    "phase.running-stage": "Running",
+    "phase.succeeded": "Complete",
+    "phase.failed": "Failed",
+    "phase.edited": "Edited",
+    "phase.exported": "Exported",
+    "workflow.status": "Workflow state: {state}",
     "placeholder.apiKey": "Use env var or paste key",
     "placeholder.organization": "Optional org id",
     "placeholder.azureEndpoint": "https://resource.openai.azure.com",
@@ -146,6 +262,10 @@ const TRANSLATIONS = {
     "aria.dropZone": "Choose or drop a source file",
     "aria.readiness": "Readiness checklist",
     "aria.resultViews": "Result views",
+    "aria.settings": "Analysis settings",
+    "aria.closeSettings": "Close settings",
+    "aria.skipWorkspace": "Skip to workspace",
+    "aria.preview": "Segmentation preview",
   },
   Chinese: {
     "brand.subtitle": "扎根理论工作台",
@@ -180,11 +300,18 @@ const TRANSLATIONS = {
     "label.streamOpenCoding": "大规模运行时流式开放编码",
     "label.promptChars": "提示字符数",
     "label.retryAttempts": "重试次数",
+    "label.sourceText": "来源文本",
+    "privacy.providerTransfer": "运行分析时，来源文本和生成的上下文会发送给所选服务商。预览仅由本地服务器处理，且绝不会包含 API 密钥。",
+    "privacy.sourceOnRun": "只有在选择“运行分析”后，来源文本才会发送到已配置的服务商。",
+    "privacy.hostRemote": "运行目标：{host}（远程）。API 密钥仅保留在本次会话内存中，GTFlow 不会保存。",
+    "privacy.hostLocal": "运行目标：{host}（本地服务）。除非该服务继续转发，否则来源文本不会离开本设备。",
+    "privacy.hostMissing": "请输入有效的服务商端点，以确认运行数据将发送到哪里。",
     "option.dialog": "对话",
     "option.paragraph": "段落",
     "option.line": "行",
     "top.eyebrow": "GTFlow 工作室",
     "top.title": "从质性证据走向理论。",
+    "title.localWorkspace": "界面和预览在本设备上运行",
     "stage.source": "来源",
     "stage.sourceSub": "粘贴或上传",
     "stage.provider": "服务商",
@@ -204,6 +331,8 @@ const TRANSLATIONS = {
     "preview.title": "预览",
     "preview.copy": "分段和就绪状态会随操作更新。",
     "preview.empty": "还没有分段。",
+    "preview.loading": "正在更新预览…",
+    "preview.showing": "显示 {shown}/{total}",
     "metric.segments": "分段",
     "metric.characters": "字符",
     "metric.avgChars": "平均字符",
@@ -226,16 +355,42 @@ const TRANSLATIONS = {
     "button.run": "运行分析",
     "button.running": "运行中",
     "button.downloadZip": "下载 ZIP",
+    "button.settings": "设置",
+    "button.cancelRun": "取消",
+    "button.cancelling": "正在取消…",
     "progress.running": "正在分析",
     "progress.runningCopy": "耗时取决于服务商延迟。",
     "progress.starting": "启动分析",
-    "progress.startingCopy": "模型管线正在通过本地 Python 服务运行。",
+    "progress.startingCopy": "GTFlow 正在准备本地管线；模型请求会发送到已配置的服务商。",
     "progress.coding": "编码分段",
     "progress.codingCopy": "正在进行开放编码和代码本生成。",
     "progress.complete": "完成",
     "progress.completeCopy": "产物已可审阅和导出。",
+    "progress.failed": "分析失败",
+    "progress.failedCopy": "上一次成功结果仍可查看。请检查设置后重试。",
+    "progress.stageCopy": "阶段进度：{percent}%",
+    "progress.cancelled": "分析已取消",
+    "progress.cancelledCopy": "未将任何部分结果视为完成；上一次成功结果仍可查看。",
+    "job.stage.queued": "排队中",
+    "job.stage.starting": "正在启动分析",
+    "job.stage.segmenting": "正在分段来源",
+    "job.stage.open-coding": "开放编码",
+    "job.stage.codebook": "构建代码本",
+    "job.stage.axial-coding": "主轴编码",
+    "job.stage.selective-coding": "选择性编码",
+    "job.stage.validation": "负例与饱和度",
+    "job.stage.finalizing": "正在收尾分析",
+    "job.stage.packaging": "构建审计包",
+    "job.stage.complete": "完成",
+    "job.stage.cancelling": "正在取消",
+    "job.stage.cancelled": "已取消",
     "results.eyebrow": "分析输出",
     "results.coreCategory": "核心范畴",
+    "stat.segments": "分段",
+    "stat.open_codes": "开放代码",
+    "stat.initial_codes": "初始代码",
+    "stat.codebook_entries": "代码本条目",
+    "stat.triples": "主轴关系",
     "tab.overview": "概览",
     "tab.gioia": "Gioia",
     "tab.contrasts": "对比",
@@ -250,7 +405,24 @@ const TRANSLATIONS = {
     "gioia.theme": "设置二阶主题",
     "gioia.dimension": "设置聚合维度",
     "gioia.apply": "应用批量对齐",
-    "gioia.download": "下载编辑后的代码本",
+    "gioia.save": "保存修改",
+    "gioia.undo": "撤销",
+    "gioia.dirty": "存在未保存编辑。保存后将重新生成 Gioia 视图、报告和 ZIP 包。",
+    "gioia.saved": "编辑已保存，导出产物已重新生成。",
+    "gioia.batchStaged": "批量对齐已暂存。请检查表格，然后保存修改。",
+    "gioia.undone": "已恢复上一版对齐。",
+    "gioia.blankCode": "保存前，每一行都必须填写代码。",
+    "gioia.duplicateCode": "代码名称不能重复：{code}",
+    "gioia.column.code": "代码",
+    "gioia.column.definition": "定义",
+    "gioia.column.theme": "主题",
+    "gioia.column.dimension": "维度",
+    "gioia.column.aliases": "别名",
+    "gioia.aria.code": "第 {row} 行代码",
+    "gioia.aria.definition": "第 {row} 行定义",
+    "gioia.aria.theme": "第 {row} 行二阶主题",
+    "gioia.aria.dimension": "第 {row} 行聚合维度",
+    "gioia.aria.aliases": "第 {row} 行别名",
     "data.segments": "分段",
     "data.openCodes": "开放代码",
     "data.codebook": "代码本",
@@ -258,10 +430,23 @@ const TRANSLATIONS = {
     "chart.empty": "暂无图表数据。",
     "toast.previewFailed": "预览失败",
     "toast.runFailed": "运行失败",
+    "toast.cancelRequested": "已请求取消。",
     "toast.batchApplied": "已应用批量对齐。",
+    "toast.gioiaFailed": "无法保存 Gioia 编辑。",
     "toast.firstFile": "已加载拖入的第一个文件。",
     "toast.readFailed": "无法读取 {name}。",
     "status.fileLoaded": "{name} 已加载（{size}）。",
+    "status.localWorkspace": "本地工作区",
+    "phase.empty": "空白",
+    "phase.configured": "已配置",
+    "phase.ready": "已就绪",
+    "phase.queued": "排队中",
+    "phase.running-stage": "运行中",
+    "phase.succeeded": "已完成",
+    "phase.failed": "失败",
+    "phase.edited": "已编辑",
+    "phase.exported": "已导出",
+    "workflow.status": "工作流状态：{state}",
     "placeholder.apiKey": "使用环境变量或粘贴密钥",
     "placeholder.organization": "可选组织 ID",
     "placeholder.azureDeployment": "部署名称",
@@ -271,6 +456,10 @@ const TRANSLATIONS = {
     "aria.dropZone": "选择或拖入来源文件",
     "aria.readiness": "就绪清单",
     "aria.resultViews": "结果视图",
+    "aria.settings": "分析设置",
+    "aria.closeSettings": "关闭设置",
+    "aria.skipWorkspace": "跳到工作区",
+    "aria.preview": "分段预览",
   },
   "Traditional Chinese": {
     "brand.subtitle": "扎根理論工作台",
@@ -305,11 +494,17 @@ const TRANSLATIONS = {
     "label.streamOpenCoding": "大規模執行時串流開放編碼",
     "label.promptChars": "提示字元數",
     "label.retryAttempts": "重試次數",
+    "label.sourceText": "來源文字",
+    "privacy.hostRemote": "執行目標：{host}（遠端）。API 金鑰只保留在本次工作階段記憶體中，GTFlow 不會儲存。",
+    "privacy.hostLocal": "執行目標：{host}（本機服務）。除非該服務繼續轉送，否則來源文字不會離開本裝置。",
+    "privacy.hostMissing": "請輸入有效的服務商端點，以確認執行資料將傳送到哪裡。",
+    "privacy.sourceOnRun": "只有在選擇「執行分析」後，來源文字才會傳送到已設定的服務商。",
     "option.dialog": "對話",
     "option.paragraph": "段落",
     "option.line": "行",
     "top.eyebrow": "GTFlow 工作室",
     "top.title": "從質性證據走向理論。",
+    "title.localWorkspace": "介面和預覽在本裝置上執行",
     "stage.source": "來源",
     "stage.sourceSub": "貼上或上傳",
     "stage.provider": "服務商",
@@ -329,6 +524,7 @@ const TRANSLATIONS = {
     "preview.title": "預覽",
     "preview.copy": "分段和就緒狀態會隨操作更新。",
     "preview.empty": "還沒有分段。",
+    "preview.showing": "顯示 {shown}/{total}",
     "metric.segments": "分段",
     "metric.characters": "字元",
     "metric.avgChars": "平均字元",
@@ -351,16 +547,42 @@ const TRANSLATIONS = {
     "button.run": "執行分析",
     "button.running": "執行中",
     "button.downloadZip": "下載 ZIP",
+    "button.settings": "設定",
+    "button.cancelRun": "取消",
+    "button.cancelling": "正在取消…",
     "progress.running": "正在分析",
     "progress.runningCopy": "耗時取決於服務商延遲。",
     "progress.starting": "啟動分析",
-    "progress.startingCopy": "模型管線正在透過本地 Python 服務執行。",
+    "progress.startingCopy": "GTFlow 正在準備本機管線；模型請求會傳送到已設定的服務商。",
     "progress.coding": "編碼分段",
     "progress.codingCopy": "正在進行開放編碼和代碼本生成。",
     "progress.complete": "完成",
     "progress.completeCopy": "產物已可審閱和匯出。",
+    "progress.failed": "分析失敗",
+    "progress.failedCopy": "上一次成功結果仍可檢視。請檢查設定後重試。",
+    "progress.stageCopy": "階段進度：{percent}%",
+    "progress.cancelled": "分析已取消",
+    "progress.cancelledCopy": "未將任何部分結果視為完成；上一次成功結果仍可檢視。",
+    "job.stage.queued": "排隊中",
+    "job.stage.starting": "正在啟動分析",
+    "job.stage.segmenting": "正在分段來源",
+    "job.stage.open-coding": "開放編碼",
+    "job.stage.codebook": "建立代碼本",
+    "job.stage.axial-coding": "主軸編碼",
+    "job.stage.selective-coding": "選擇性編碼",
+    "job.stage.validation": "負例與飽和度",
+    "job.stage.finalizing": "正在完成分析",
+    "job.stage.packaging": "建立稽核套件",
+    "job.stage.complete": "完成",
+    "job.stage.cancelling": "正在取消",
+    "job.stage.cancelled": "已取消",
     "results.eyebrow": "分析輸出",
     "results.coreCategory": "核心範疇",
+    "stat.segments": "分段",
+    "stat.open_codes": "開放代碼",
+    "stat.initial_codes": "初始代碼",
+    "stat.codebook_entries": "代碼本條目",
+    "stat.triples": "主軸關係",
     "tab.overview": "概覽",
     "tab.gioia": "Gioia",
     "tab.contrasts": "對比",
@@ -375,7 +597,24 @@ const TRANSLATIONS = {
     "gioia.theme": "設定二階主題",
     "gioia.dimension": "設定聚合維度",
     "gioia.apply": "套用批次對齊",
-    "gioia.download": "下載編輯後的代碼本",
+    "gioia.save": "儲存修改",
+    "gioia.undo": "復原",
+    "gioia.dirty": "有尚未儲存的編輯。儲存後將重新產生 Gioia 視圖、報告與 ZIP 套件。",
+    "gioia.saved": "編輯已儲存，匯出產物已重新產生。",
+    "gioia.batchStaged": "批次對齊已暫存。請檢查表格，然後儲存修改。",
+    "gioia.undone": "已還原上一版對齊。",
+    "gioia.blankCode": "儲存前，每一列都必須填寫代碼。",
+    "gioia.duplicateCode": "代碼名稱不可重複：{code}",
+    "gioia.column.code": "代碼",
+    "gioia.column.definition": "定義",
+    "gioia.column.theme": "主題",
+    "gioia.column.dimension": "維度",
+    "gioia.column.aliases": "別名",
+    "gioia.aria.code": "第 {row} 列代碼",
+    "gioia.aria.definition": "第 {row} 列定義",
+    "gioia.aria.theme": "第 {row} 列二階主題",
+    "gioia.aria.dimension": "第 {row} 列聚合維度",
+    "gioia.aria.aliases": "第 {row} 列別名",
     "data.segments": "分段",
     "data.openCodes": "開放代碼",
     "data.codebook": "代碼本",
@@ -383,10 +622,21 @@ const TRANSLATIONS = {
     "chart.empty": "暫無圖表資料。",
     "toast.previewFailed": "預覽失敗",
     "toast.runFailed": "執行失敗",
+    "toast.cancelRequested": "已要求取消。",
     "toast.batchApplied": "已套用批次對齊。",
     "toast.firstFile": "已載入拖入的第一個檔案。",
     "toast.readFailed": "無法讀取 {name}。",
     "status.fileLoaded": "{name} 已載入（{size}）。",
+    "phase.empty": "空白",
+    "phase.configured": "已設定",
+    "phase.ready": "已就緒",
+    "phase.queued": "排隊中",
+    "phase.running-stage": "執行中",
+    "phase.succeeded": "已完成",
+    "phase.failed": "失敗",
+    "phase.edited": "已編輯",
+    "phase.exported": "已匯出",
+    "workflow.status": "工作流程狀態：{state}",
     "placeholder.apiKey": "使用環境變數或貼上金鑰",
     "placeholder.organization": "可選組織 ID",
     "placeholder.azureDeployment": "部署名稱",
@@ -396,6 +646,10 @@ const TRANSLATIONS = {
     "aria.dropZone": "選擇或拖入來源檔案",
     "aria.readiness": "就緒清單",
     "aria.resultViews": "結果視圖",
+    "aria.settings": "分析設定",
+    "aria.closeSettings": "關閉設定",
+    "aria.skipWorkspace": "跳到工作區",
+    "aria.preview": "分段預覽",
   },
   Japanese: {
     "join.and": "と",
@@ -532,6 +786,132 @@ function languageMeta(language = currentLanguage()) {
   return LANGUAGE_OPTIONS.find((item) => item.value === language) || LANGUAGE_OPTIONS[0];
 }
 
+function restoreNonSensitiveSettings() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SETTINGS_STORAGE_KEY) || "{}");
+    SAVED_SETTING_IDS.forEach((id) => {
+      const node = $(id);
+      if (!node || !Object.prototype.hasOwnProperty.call(saved, id)) return;
+      if (node.type === "checkbox") node.checked = Boolean(saved[id]);
+      else node.value = String(saved[id]);
+    });
+  } catch (_error) {
+    // Storage can be disabled in hardened browser profiles; settings remain session-only.
+  }
+}
+
+function persistNonSensitiveSettings() {
+  try {
+    const saved = {};
+    SAVED_SETTING_IDS.forEach((id) => {
+      const node = $(id);
+      if (!node) return;
+      saved[id] = node.type === "checkbox" ? node.checked : node.value;
+    });
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(saved));
+  } catch (_error) {
+    // Failing to persist preferences must never block analysis.
+  }
+}
+
+function usesSettingsDrawer() {
+  return window.matchMedia("(max-width: 920px)").matches;
+}
+
+function setSettingsOpen(open, { restoreFocus = true } = {}) {
+  const panel = $("settingsPanel");
+  const backdrop = $("settingsBackdrop");
+  const toggle = $("settingsToggle");
+  const shouldOpen = usesSettingsDrawer() && Boolean(open);
+  state.settingsOpen = shouldOpen;
+  document.body.classList.toggle("settings-open", shouldOpen);
+  toggle.setAttribute("aria-expanded", String(shouldOpen));
+  backdrop.hidden = !shouldOpen;
+  if (usesSettingsDrawer()) {
+    panel.setAttribute("aria-hidden", String(!shouldOpen));
+    if (shouldOpen) panel.removeAttribute("inert");
+    else panel.setAttribute("inert", "");
+  } else {
+    panel.removeAttribute("aria-hidden");
+    panel.removeAttribute("inert");
+  }
+  if (shouldOpen) {
+    state.settingsRestoreFocus = document.activeElement;
+    window.requestAnimationFrame(() => $("settingsClose").focus());
+  } else if (restoreFocus && state.settingsRestoreFocus?.focus) {
+    state.settingsRestoreFocus.focus();
+    state.settingsRestoreFocus = null;
+  }
+}
+
+function handleSettingsKeydown(event) {
+  if (!state.settingsOpen) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    setSettingsOpen(false);
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(
+    $("settingsPanel").querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex="0"]')
+  ).filter((node) => !node.closest("[hidden]") && node.getClientRects().length > 0);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function providerDestination() {
+  const provider = $("providerName").value;
+  let endpoint = "";
+  if (provider === "azure_openai") endpoint = $("azureEndpoint").value.trim();
+  else if (provider === "anthropic") endpoint = "https://api.anthropic.com";
+  else if (provider === "ollama") endpoint = $("baseUrl").value.trim() || "http://localhost:11434/v1";
+  else endpoint = $("baseUrl").value.trim() || "https://api.openai.com/v1";
+  try {
+    const url = new URL(endpoint);
+    const hostname = url.hostname.toLowerCase();
+    const local = hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
+    return { host: url.host, local };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function updateProviderNotice() {
+  const destination = providerDestination();
+  if (!destination) {
+    $("providerHostNotice").textContent = t("privacy.hostMissing");
+    return;
+  }
+  $("providerHostNotice").textContent = t(destination.local ? "privacy.hostLocal" : "privacy.hostRemote", {
+    host: destination.host,
+  });
+}
+
+function setupWorkflowState(readiness = state.lastReadiness) {
+  if (readiness.ready) return "ready";
+  if (readiness.input || readiness.provider) return "configured";
+  return "empty";
+}
+
+function transitionWorkflow(next, readiness = state.lastReadiness) {
+  if (!WORKFLOW_STATES.has(next)) throw new Error(`Unknown workflow state: ${next}`);
+  state.workflowState = next;
+  state.lastReadiness = { ...state.lastReadiness, ...(readiness || {}) };
+  document.body.dataset.workflowState = next;
+  const label = t(`phase.${next}`);
+  $("phaseBadge").textContent = label;
+  $("workflowStatus").textContent = t("workflow.status", { state: label });
+  setWorkflowState(state.lastReadiness);
+}
+
 function t(key, values = {}) {
   const language = currentLanguage();
   const text = TRANSLATIONS[language]?.[key] ?? TRANSLATIONS.English[key] ?? key;
@@ -550,7 +930,12 @@ function applyLanguage() {
   document.querySelectorAll("[data-i18n-aria-label]").forEach((node) => {
     node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel));
   });
+  document.querySelectorAll("[data-i18n-title]").forEach((node) => {
+    node.setAttribute("title", t(node.dataset.i18nTitle));
+  });
   refreshLocalizedState();
+  updateProviderNotice();
+  transitionWorkflow(state.workflowState, state.lastReadiness);
 }
 
 function refreshLocalizedState() {
@@ -567,13 +952,22 @@ function refreshLocalizedState() {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
+  restoreNonSensitiveSettings();
   setupLanguageOptions();
   bindControls();
   applyLanguage();
   updateProviderFields();
   updateSourceMeta();
-  refreshPreview();
+  setSettingsOpen(false, { restoreFocus: false });
+  transitionWorkflow("empty");
+  try {
+    await ensureCsrfToken();
+    resumeStoredJob();
+    refreshPreview();
+  } catch (error) {
+    showToast(error.message || "Could not establish a secure local session.");
+  }
   document.body.dataset.ui = "ready";
 });
 
@@ -606,9 +1000,16 @@ function bindControls() {
     "retryMax",
   ].forEach((id) => {
     const node = $(id);
-    if (node) node.addEventListener("input", schedulePreview);
+    if (node) node.addEventListener("input", () => {
+      schedulePreview();
+      if (SAVED_SETTING_IDS.includes(id)) persistNonSensitiveSettings();
+      if (["providerName", "baseUrl", "azureEndpoint"].includes(id)) updateProviderNotice();
+    });
   });
-  $("providerName").addEventListener("change", updateProviderFields);
+  $("providerName").addEventListener("change", () => {
+    updateProviderFields();
+    persistNonSensitiveSettings();
+  });
   $("outputLanguage").addEventListener("change", () => {
     applyLanguage();
     if (state.lastResult) renderResults(state.lastResult, false);
@@ -645,7 +1046,13 @@ function bindControls() {
   });
   bindFileDrop();
   $("runButton").addEventListener("click", runAnalysis);
+  $("cancelRun").addEventListener("click", cancelActiveRun);
   $("downloadZip").addEventListener("click", downloadZip);
+  $("settingsToggle").addEventListener("click", () => setSettingsOpen(true));
+  $("settingsClose").addEventListener("click", () => setSettingsOpen(false));
+  $("settingsBackdrop").addEventListener("click", () => setSettingsOpen(false));
+  $("settingsPanel").addEventListener("keydown", handleSettingsKeydown);
+  window.addEventListener("resize", () => setSettingsOpen(state.settingsOpen, { restoreFocus: false }));
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !$("runButton").disabled) {
       event.preventDefault();
@@ -654,6 +1061,7 @@ function bindControls() {
   });
   document.querySelectorAll(".tab").forEach((button) => {
     button.addEventListener("click", () => activateTab(button.dataset.tab));
+    button.addEventListener("keydown", handleTabKeydown);
   });
 }
 
@@ -742,28 +1150,85 @@ function formatBytes(bytes) {
 
 function updateProviderFields() {
   const provider = $("providerName").value;
+  const baseUrl = $("baseUrl");
+  if (provider === "ollama" && (!baseUrl.value.trim() || baseUrl.value.trim() === "https://api.openai.com/v1")) {
+    baseUrl.value = "http://localhost:11434/v1";
+  } else if (provider === "openai_compatible" && baseUrl.value.trim() === "http://localhost:11434/v1") {
+    baseUrl.value = "https://api.openai.com/v1";
+  }
   $("azureFields").classList.toggle("hidden", provider !== "azure_openai");
-  $("openaiFields").classList.toggle("hidden", provider !== "openai_compatible");
+  $("openaiFields").classList.toggle("hidden", !["openai_compatible", "ollama"].includes(provider));
+  state.lastProvider = provider;
+  updateProviderNotice();
   schedulePreview();
+}
+
+function resumeStoredJob() {
+  try {
+    const jobId = window.sessionStorage.getItem("gtflow.activeJobId") || "";
+    if (!/^[A-Za-z0-9_-]{24,64}$/.test(jobId)) return;
+    state.activeJobId = jobId;
+    document.body.classList.add("is-running");
+    $("progressPanel").classList.remove("hidden");
+    $("progressPanel").setAttribute("aria-busy", "true");
+    $("runButton").disabled = true;
+    $("runButton").setAttribute("aria-busy", "true");
+    $("cancelRun").hidden = false;
+    transitionWorkflow("queued");
+    setProgress(0, t("job.stage.queued"), t("progress.startingCopy"));
+    scheduleJobPoll(0);
+  } catch (_error) {
+    // Session recovery is optional.
+  }
 }
 
 function schedulePreview() {
   updateSourceMeta();
   window.clearTimeout(state.previewTimer);
-  state.previewTimer = window.setTimeout(refreshPreview, 250);
+  if (state.previewRequest) {
+    state.previewRequest.abort();
+    state.previewRequest = null;
+  }
+  const sequence = ++state.previewSequence;
+  const chars = $("inputText").value.length;
+  const delay = chars >= 200000 ? 700 : chars >= 20000 ? 450 : 250;
+  state.previewTimer = window.setTimeout(() => refreshPreview(sequence), delay);
 }
 
-async function refreshPreview() {
-  const payload = buildPayload();
-  if (!payload.text.trim()) {
-    renderPreview({ stats: { segments: 0, characters: 0, avg_chars: 0 }, segments: [], readiness: { ready: false, input: false, provider: providerLooksReady(), segments: 0 } });
+async function refreshPreview(sequence = null) {
+  window.clearTimeout(state.previewTimer);
+  if (sequence === null) {
+    if (state.previewRequest) state.previewRequest.abort();
+    sequence = ++state.previewSequence;
+  } else if (sequence !== state.previewSequence) {
     return;
   }
+
+  const payload = buildPayload({ includeCredential: false });
+  payload.credential_configured = Boolean($("apiKey").value.trim());
+  if (!payload.text.trim()) {
+    if (sequence === state.previewSequence) {
+      renderPreview({ stats: { segments: 0, characters: 0, avg_chars: 0 }, segments: [], readiness: { ready: false, input: false, provider: providerLooksReady(), segments: 0 } });
+      $("previewPanel").setAttribute("aria-busy", "false");
+    }
+    return;
+  }
+
+  const controller = new AbortController();
+  state.previewRequest = controller;
+  $("previewPanel").setAttribute("aria-busy", "true");
   try {
-    const data = await postJson("/api/preview", payload);
-    renderPreview(data);
+    const data = await postJson("/api/preview", payload, { signal: controller.signal });
+    if (sequence === state.previewSequence) renderPreview(data);
   } catch (error) {
-    showToast(error.message || t("toast.previewFailed"));
+    if (error.name !== "AbortError" && sequence === state.previewSequence) {
+      showToast(error.message || t("toast.previewFailed"), { kind: "error" });
+    }
+  } finally {
+    if (sequence === state.previewSequence && state.previewRequest === controller) {
+      state.previewRequest = null;
+      $("previewPanel").setAttribute("aria-busy", "false");
+    }
   }
 }
 
@@ -774,23 +1239,34 @@ function renderPreview(data) {
   $("metricSegments").textContent = stats.segments || 0;
   $("metricChars").textContent = stats.characters || 0;
   $("metricAvg").textContent = stats.avg_chars || 0;
-  $("providerStep").classList.toggle("active", !!readiness.provider);
-  $("runStep").classList.toggle("active", !!readiness.ready);
-  $("runButton").disabled = !readiness.ready;
+  state.lastReadiness = { ...state.lastReadiness, ...readiness };
+  const fingerprint = analysisFingerprint();
+  const resultStateIsCurrent = state.lastResult
+    && state.lastSuccessfulFingerprint === fingerprint
+    && ["succeeded", "edited", "exported"].includes(state.workflowState);
+  const failedAttemptIsCurrent = state.workflowState === "failed" && state.lastAttemptFingerprint === fingerprint;
+  if (ACTIVE_RUN_STATES.has(state.workflowState) || failedAttemptIsCurrent || resultStateIsCurrent) {
+    setWorkflowState(readiness);
+  } else {
+    transitionWorkflow(setupWorkflowState(readiness), readiness);
+  }
+  $("runButton").disabled = Boolean(state.activeJobId) || !readiness.ready;
   document.body.classList.toggle("is-ready", !!readiness.ready);
   $("runHelp").textContent = runHelpText(readiness, stats);
   renderReadiness(readiness, stats);
 
   const list = $("previewList");
   const segments = data.segments || [];
+  const total = Number(stats.segments || segments.length || 0);
+  const visibleSegments = segments.slice(0, 30);
+  $("previewCount").textContent = t("preview.showing", { shown: visibleSegments.length, total });
   if (!segments.length) {
     list.className = "preview-list empty";
     list.textContent = t("preview.empty");
     return;
   }
   list.className = "preview-list";
-  list.innerHTML = segments
-    .slice(0, 30)
+  list.innerHTML = visibleSegments
     .map((seg) => `<div class="segment-row"><b>${escapeHtml(seg.seg_id)} ${escapeHtml(seg.speaker || "")}</b><p>${escapeHtml((seg.text || "").slice(0, 220))}</p></div>`)
     .join("");
 }
@@ -839,6 +1315,7 @@ function providerLooksReady() {
   const provider = $("providerName").value;
   const hasModel = $("model").value.trim().length > 0;
   const hasKey = $("apiKey").value.trim().length > 0;
+  if (provider === "ollama") return hasModel && Boolean(providerDestination()?.local);
   if (provider === "azure_openai") {
     return hasModel && hasKey && $("azureEndpoint").value.trim() && $("azureDeployment").value.trim();
   }
@@ -846,55 +1323,181 @@ function providerLooksReady() {
 }
 
 async function runAnalysis() {
+  if (state.activeJobId) return;
   $("progressPanel").classList.remove("hidden");
-  $("resultsPanel").classList.add("hidden");
+  if (state.lastResult) $("resultsPanel").classList.add("is-stale");
+  state.lastAttemptFingerprint = analysisFingerprint();
+  transitionWorkflow("queued", { input: true, provider: true, ready: true });
   document.body.classList.add("is-running");
-  setProgress(12, t("progress.starting"), t("progress.startingCopy"));
+  $("progressPanel").setAttribute("aria-busy", "true");
+  $("runButton").setAttribute("aria-busy", "true");
+  $("cancelRun").hidden = false;
+  $("cancelRun").disabled = false;
+  $("cancelRun").textContent = t("button.cancelRun");
+  setProgress(0, t("job.stage.queued"), t("progress.startingCopy"));
   $("runButton").disabled = true;
   $("runButton").textContent = t("button.running");
   try {
-    setProgress(32, t("progress.coding"), t("progress.codingCopy"));
-    const result = await postJson("/api/run", buildPayload());
-    state.lastResult = result;
-    state.editedCodebook = result.codebook;
-    setProgress(100, t("progress.complete"), t("progress.completeCopy"));
-    renderResults(result);
+    const job = await postJson("/api/jobs", buildPayload());
+    state.activeJobId = job.job_id;
+    try {
+      window.sessionStorage.setItem("gtflow.activeJobId", job.job_id);
+    } catch (_error) {
+      // Session recovery is optional in hardened browser profiles.
+    }
+    handleJobUpdate(job);
+    scheduleJobPoll();
   } catch (error) {
-    showToast(error.message || t("toast.runFailed"));
-  } finally {
-    document.body.classList.remove("is-running");
-    $("runButton").disabled = false;
-    $("runButton").textContent = t("button.run");
+    transitionWorkflow("failed", { input: true, provider: true, ready: true });
+    setProgress(0, t("progress.failed"), t("progress.failedCopy"));
+    showToast(error.message || t("toast.runFailed"), { kind: "error" });
+    finishActiveJob();
   }
 }
 
+function scheduleJobPoll(delay = 650) {
+  window.clearTimeout(state.jobPollTimer);
+  if (!state.activeJobId) return;
+  state.jobPollTimer = window.setTimeout(pollActiveJob, delay);
+}
+
+async function pollActiveJob() {
+  if (!state.activeJobId) return;
+  const jobId = state.activeJobId;
+  const controller = new AbortController();
+  state.jobPollController = controller;
+  try {
+    const job = await getJson(`/api/jobs/${encodeURIComponent(jobId)}`, { signal: controller.signal });
+    if (state.activeJobId !== jobId) return;
+    handleJobUpdate(job);
+    if (state.activeJobId) scheduleJobPoll();
+  } catch (error) {
+    if (error.name === "AbortError" || state.activeJobId !== jobId) return;
+    transitionWorkflow("failed");
+    setProgress(0, t("progress.failed"), t("progress.failedCopy"));
+    showToast(error.message || t("toast.runFailed"), { kind: "error" });
+    finishActiveJob();
+  } finally {
+    if (state.jobPollController === controller) state.jobPollController = null;
+  }
+}
+
+function handleJobUpdate(job) {
+  const status = job.status || "queued";
+  const stage = job.stage || "queued";
+  const stageLabel = t(`job.stage.${stage}`);
+  if (status === "queued") {
+    transitionWorkflow("queued");
+    setProgress(job.progress || 0, stageLabel, t("progress.startingCopy"));
+    return;
+  }
+  if (["running", "cancelling"].includes(status)) {
+    transitionWorkflow("running-stage");
+    const progress = Math.max(1, Number(job.progress) || 1);
+    setProgress(progress, stageLabel, t("progress.stageCopy", { percent: progress }));
+    const cancelling = status === "cancelling";
+    $("cancelRun").disabled = cancelling || job.can_cancel === false;
+    $("cancelRun").textContent = t(cancelling ? "button.cancelling" : "button.cancelRun");
+    return;
+  }
+  if (status === "succeeded") {
+    state.lastResult = job.result;
+    state.lastSuccessfulFingerprint = state.lastAttemptFingerprint;
+    state.editedCodebook = job.result?.codebook || null;
+    state.resultJobId = job.job_id;
+    state.bundleDownloadUrl = job.download_url || `/api/jobs/${encodeURIComponent(job.job_id)}/bundle`;
+    state.gioiaDirty = false;
+    state.codebookHistory = [];
+    setProgress(100, t("progress.complete"), t("progress.completeCopy"));
+    renderResults(job.result);
+    finishActiveJob();
+    return;
+  }
+  if (status === "cancelled") {
+    transitionWorkflow("failed");
+    setProgress(job.progress || 0, t("progress.cancelled"), t("progress.cancelledCopy"));
+    finishActiveJob();
+    return;
+  }
+  if (status === "failed") {
+    transitionWorkflow("failed");
+    setProgress(job.progress || 0, t("progress.failed"), t("progress.failedCopy"));
+    showToast(job.error?.message || t("toast.runFailed"), { kind: "error" });
+    finishActiveJob();
+  }
+}
+
+async function cancelActiveRun() {
+  if (!state.activeJobId) return;
+  $("cancelRun").disabled = true;
+  $("cancelRun").textContent = t("button.cancelling");
+  try {
+    const job = await deleteJson(`/api/jobs/${encodeURIComponent(state.activeJobId)}`);
+    handleJobUpdate(job);
+    showToast(t("toast.cancelRequested"));
+  } catch (error) {
+    $("cancelRun").disabled = false;
+    $("cancelRun").textContent = t("button.cancelRun");
+    showToast(error.message || t("toast.runFailed"), { kind: "error" });
+  }
+}
+
+function finishActiveJob() {
+  window.clearTimeout(state.jobPollTimer);
+  state.jobPollTimer = null;
+  if (state.jobPollController) state.jobPollController.abort();
+  state.jobPollController = null;
+  state.activeJobId = null;
+  try {
+    window.sessionStorage.removeItem("gtflow.activeJobId");
+  } catch (_error) {
+    // Session recovery is optional.
+  }
+  document.body.classList.remove("is-running");
+  $("progressPanel").setAttribute("aria-busy", "false");
+  $("runButton").removeAttribute("aria-busy");
+  $("runButton").disabled = !state.lastReadiness.ready;
+  $("runButton").textContent = t("button.run");
+  $("cancelRun").hidden = true;
+}
+
 function setProgress(value, title, copy) {
-  $("progressBar").style.width = `${value}%`;
+  const indeterminate = value === null || value === undefined;
+  const progress = indeterminate ? 0 : Math.max(0, Math.min(100, Number(value) || 0));
+  $("progressTrack").classList.toggle("is-indeterminate", indeterminate);
+  $("progressBar").style.width = indeterminate ? "36%" : `${progress}%`;
+  if (indeterminate) $("progressTrack").removeAttribute("aria-valuenow");
+  else $("progressTrack").setAttribute("aria-valuenow", String(progress));
   $("progressTitle").textContent = title;
   $("progressCopy").textContent = copy;
 }
 
-function buildPayload() {
+function buildPayload({ includeCredential = true } = {}) {
+  const baseUrl = $("baseUrl").value.trim();
+  const provider = {
+    name: $("providerName").value,
+    model: $("model").value,
+    // Omitting the official default allows the server's trusted environment
+    // credential to be used. Any custom endpoint requires a key entered here.
+    base_url: baseUrl && baseUrl !== "https://api.openai.com/v1" ? baseUrl : null,
+    organization: $("organization").value || null,
+    use_responses_api: $("useResponses").checked,
+    endpoint: $("azureEndpoint").value || null,
+    api_version: $("apiVersion").value || null,
+    deployment: $("azureDeployment").value || null,
+    output_language: $("outputLanguage").value,
+    structured: $("structuredOutput").checked,
+    temperature: numberValue("temperature", 0.2),
+    max_tokens: numberValue("maxTokens", 1024),
+    price_input_per_1k: optionalNumberValue("priceIn"),
+    price_output_per_1k: optionalNumberValue("priceOut"),
+  };
+  if (includeCredential) provider.api_key = $("apiKey").value || null;
+
   return {
     text: $("inputText").value,
-    source_name: state.sourceName,
-    provider: {
-      name: $("providerName").value,
-      model: $("model").value,
-      api_key: $("apiKey").value || null,
-      base_url: $("baseUrl").value || null,
-      organization: $("organization").value || null,
-      use_responses_api: $("useResponses").checked,
-      endpoint: $("azureEndpoint").value || null,
-      api_version: $("apiVersion").value || null,
-      deployment: $("azureDeployment").value || null,
-      output_language: $("outputLanguage").value,
-      structured: $("structuredOutput").checked,
-      temperature: numberValue("temperature", 0.2),
-      max_tokens: numberValue("maxTokens", 1024),
-      price_input_per_1k: optionalNumberValue("priceIn"),
-      price_output_per_1k: optionalNumberValue("priceOut"),
-    },
+    source_name: state.sourceName || "",
+    provider,
     run: {
       segmentation_strategy: $("segmentationStrategy").value,
       max_segment_chars: numberValue("maxSegmentChars", 800),
@@ -922,20 +1525,118 @@ function optionalNumberValue(id) {
   return Number.isFinite(value) ? value : null;
 }
 
-async function postJson(url, payload) {
+function analysisFingerprint() {
+  return JSON.stringify(buildPayload({ includeCredential: false }));
+}
+
+async function ensureCsrfToken(force = false) {
+  if (force) state.csrfToken = null;
+  if (state.csrfToken) return state.csrfToken;
+  if (!state.csrfRequest) {
+    state.csrfRequest = fetch("/api/default-config", {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      credentials: "same-origin",
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not establish a secure local session.");
+        const token = response.headers.get("X-GTFlow-CSRF");
+        if (!token) throw new Error("The local server did not provide a CSRF token.");
+        // Consume the response so the connection can be reused cleanly.
+        await response.json();
+        state.csrfToken = token;
+        return token;
+      })
+      .finally(() => {
+        state.csrfRequest = null;
+      });
+  }
+  return state.csrfRequest;
+}
+
+async function postJson(url, payload, { signal, retryCsrf = true } = {}) {
+  const csrfToken = await ensureCsrfToken();
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-GTFlow-CSRF": csrfToken,
+    },
+    credentials: "same-origin",
     body: JSON.stringify(payload),
+    signal,
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || response.statusText);
+  let data = {};
+  try {
+    data = await response.json();
+  } catch (_error) {
+    throw new Error(response.statusText || "The server returned an invalid response.");
+  }
+  const errorCode = typeof data.error === "object" ? data.error?.code : null;
+  if (response.status === 403 && errorCode === "csrf_rejected" && retryCsrf) {
+    await ensureCsrfToken(true);
+    return postJson(url, payload, { signal, retryCsrf: false });
+  }
+  if (!response.ok) {
+    const message = typeof data.error === "object" ? data.error?.message : data.error;
+    throw new Error(message || response.statusText);
+  }
+  return data;
+}
+
+async function getJson(url, { signal } = {}) {
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    credentials: "same-origin",
+    signal,
+  });
+  let data = {};
+  try {
+    data = await response.json();
+  } catch (_error) {
+    throw new Error(response.statusText || "The server returned an invalid response.");
+  }
+  if (!response.ok) {
+    const message = typeof data.error === "object" ? data.error?.message : data.error;
+    throw new Error(message || response.statusText);
+  }
+  return data;
+}
+
+async function deleteJson(url, { retryCsrf = true } = {}) {
+  const csrfToken = await ensureCsrfToken();
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { "X-GTFlow-CSRF": csrfToken },
+    credentials: "same-origin",
+  });
+  let data = {};
+  try {
+    data = await response.json();
+  } catch (_error) {
+    throw new Error(response.statusText || "The server returned an invalid response.");
+  }
+  const errorCode = typeof data.error === "object" ? data.error?.code : null;
+  if (response.status === 403 && errorCode === "csrf_rejected" && retryCsrf) {
+    await ensureCsrfToken(true);
+    return deleteJson(url, { retryCsrf: false });
+  }
+  if (!response.ok) {
+    const message = typeof data.error === "object" ? data.error?.message : data.error;
+    throw new Error(message || response.statusText);
+  }
   return data;
 }
 
 function renderResults(result, shouldScroll = true) {
   $("resultsPanel").classList.remove("hidden");
+  $("resultsPanel").classList.remove("is-stale");
   document.body.classList.add("has-results");
+  transitionWorkflow("succeeded", { input: true, provider: true, ready: true });
+  $("downloadZip").disabled = !(state.bundleDownloadUrl || result.bundle_base64);
   $("coreCategory").textContent = result.theory?.core_category || t("results.coreCategory");
   $("storyline").textContent = result.theory?.storyline || "";
   renderStats(result.stats || {});
@@ -948,9 +1649,47 @@ function renderResults(result, shouldScroll = true) {
   if (shouldScroll) $("resultsPanel").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function setWorkflowState(readiness = {}) {
+  const inputReady = Boolean(readiness.input);
+  const providerReady = Boolean(readiness.provider);
+  const runReady = Boolean(readiness.ready);
+  const phase = state.workflowState;
+  const stages = ["sourceStep", "providerStep", "runStep", "reviewStep", "exportStep"];
+  let current = "sourceStep";
+  if (["queued", "running-stage", "failed", "ready"].includes(phase)) current = "runStep";
+  else if (["succeeded", "edited"].includes(phase)) current = "reviewStep";
+  else if (phase === "exported") current = "exportStep";
+  else if (inputReady && !providerReady) current = "providerStep";
+  else if (inputReady && providerReady) current = "runStep";
+  const completed = {
+    sourceStep: inputReady,
+    providerStep: providerReady,
+    runStep: ["succeeded", "edited", "exported"].includes(phase),
+    reviewStep: ["edited", "exported"].includes(phase),
+    exportStep: phase === "exported",
+  };
+
+  stages.forEach((id) => {
+    const node = $(id);
+    const isCurrent = id === current;
+    const isFailed = id === "runStep" && phase === "failed";
+    const isAvailable = (id === "runStep" && runReady) || ((id === "reviewStep" || id === "exportStep") && state.lastResult);
+    node.classList.toggle("active", isCurrent);
+    node.classList.toggle("is-available", Boolean(isAvailable));
+    node.classList.toggle("is-complete", completed[id]);
+    node.classList.toggle("is-failed", isFailed);
+    if (isCurrent) node.setAttribute("aria-current", "step");
+    else node.removeAttribute("aria-current");
+  });
+}
+
 function renderStats(stats) {
   $("statCards").innerHTML = Object.entries(stats)
-    .map(([key, value]) => `<div class="metric"><span>${titleCase(key)}</span><b>${value}</b></div>`)
+    .map(([key, value]) => {
+      const translationKey = `stat.${key}`;
+      const label = t(translationKey);
+      return `<div class="metric"><span>${escapeHtml(label === translationKey ? titleCase(key) : label)}</span><b>${value}</b></div>`;
+    })
     .join("");
 }
 
@@ -968,15 +1707,22 @@ function renderGioia(result) {
   $("tab-gioia").innerHTML = `
     <div class="panel-head compact"><div><h2>${escapeHtml(t("gioia.title"))}</h2><p>${escapeHtml(t("gioia.copy"))}</p></div></div>
     <div class="edit-grid">
-      <input id="gioiaFilter" placeholder="${escapeAttr(t("gioia.filter"))}" />
-      <input id="gioiaTheme" placeholder="${escapeAttr(t("gioia.theme"))}" />
-      <input id="gioiaDimension" placeholder="${escapeAttr(t("gioia.dimension"))}" />
+      <label><span>${escapeHtml(t("gioia.filter"))}</span><input id="gioiaFilter" /></label>
+      <label><span>${escapeHtml(t("gioia.theme"))}</span><input id="gioiaTheme" /></label>
+      <label><span>${escapeHtml(t("gioia.dimension"))}</span><input id="gioiaDimension" /></label>
     </div>
-    <div class="button-row"><button id="applyGioia" class="secondary">${escapeHtml(t("gioia.apply"))}</button><button id="downloadCodebook" class="ghost">${escapeHtml(t("gioia.download"))}</button></div>
+    <div class="button-row gioia-actions">
+      <button id="applyGioia" class="secondary" type="button">${escapeHtml(t("gioia.apply"))}</button>
+      <button id="saveGioia" class="primary" type="button" ${state.gioiaDirty ? "" : "disabled"}>${escapeHtml(t("gioia.save"))}</button>
+      <button id="undoGioia" class="ghost" type="button" ${state.gioiaDirty || state.codebookHistory.length ? "" : "disabled"}>${escapeHtml(t("gioia.undo"))}</button>
+    </div>
+    <p id="gioiaStatus" class="hint ${state.gioiaDirty ? "is-dirty" : ""}" role="status" aria-live="polite">${state.gioiaDirty ? escapeHtml(t("gioia.dirty")) : ""}</p>
     <div class="table-wrap">${editableGioiaTable(rows)}</div>
   `;
   $("applyGioia").addEventListener("click", applyGioiaBatch);
-  $("downloadCodebook").addEventListener("click", downloadEditedCodebook);
+  $("saveGioia").addEventListener("click", saveGioiaEdits);
+  $("undoGioia").addEventListener("click", undoGioiaEdits);
+  $("gioiaTable").addEventListener("input", markGioiaDirty);
 }
 
 function codebookRows(codebook) {
@@ -998,13 +1744,13 @@ function codebookRows(codebook) {
 }
 
 function editableGioiaTable(rows) {
-  return `<table id="gioiaTable"><thead><tr><th>Code</th><th>Definition</th><th>Theme</th><th>Dimension</th><th>Aliases</th></tr></thead><tbody>
+  return `<table id="gioiaTable"><thead><tr><th>${escapeHtml(t("gioia.column.code"))}</th><th>${escapeHtml(t("gioia.column.definition"))}</th><th>${escapeHtml(t("gioia.column.theme"))}</th><th>${escapeHtml(t("gioia.column.dimension"))}</th><th>${escapeHtml(t("gioia.column.aliases"))}</th></tr></thead><tbody>
     ${rows.map((row, idx) => `<tr data-old-code="${escapeHtml(row.old_code)}">
-      <td><input data-field="code" data-row="${idx}" value="${escapeAttr(row.code)}" /></td>
-      <td><input data-field="definition" data-row="${idx}" value="${escapeAttr(row.definition)}" /></td>
-      <td><input data-field="second_order_theme" data-row="${idx}" value="${escapeAttr(row.second_order_theme)}" /></td>
-      <td><input data-field="aggregate_dimension" data-row="${idx}" value="${escapeAttr(row.aggregate_dimension)}" /></td>
-      <td><input data-field="aliases" data-row="${idx}" value="${escapeAttr(row.aliases)}" /></td>
+      <td><input aria-label="${escapeAttr(t("gioia.aria.code", { row: idx + 1 }))}" data-field="code" data-row="${idx}" value="${escapeAttr(row.code)}" /></td>
+      <td><input aria-label="${escapeAttr(t("gioia.aria.definition", { row: idx + 1 }))}" data-field="definition" data-row="${idx}" value="${escapeAttr(row.definition)}" /></td>
+      <td><input aria-label="${escapeAttr(t("gioia.aria.theme", { row: idx + 1 }))}" data-field="second_order_theme" data-row="${idx}" value="${escapeAttr(row.second_order_theme)}" /></td>
+      <td><input aria-label="${escapeAttr(t("gioia.aria.dimension", { row: idx + 1 }))}" data-field="aggregate_dimension" data-row="${idx}" value="${escapeAttr(row.aggregate_dimension)}" /></td>
+      <td><input aria-label="${escapeAttr(t("gioia.aria.aliases", { row: idx + 1 }))}" data-field="aliases" data-row="${idx}" value="${escapeAttr(row.aliases)}" /></td>
     </tr>`).join("")}
   </tbody></table>`;
 }
@@ -1014,39 +1760,114 @@ function applyGioiaBatch() {
   const theme = $("gioiaTheme").value.trim();
   const dimension = $("gioiaDimension").value.trim();
   document.querySelectorAll("#gioiaTable tbody tr").forEach((tr) => {
-    const text = tr.innerText.toLowerCase();
+    const text = Array.from(tr.querySelectorAll("input"), (input) => input.value).join(" ").toLowerCase();
     if (!filter || text.includes(filter)) {
       if (theme) tr.querySelector('[data-field="second_order_theme"]').value = theme;
       if (dimension) tr.querySelector('[data-field="aggregate_dimension"]').value = dimension;
     }
   });
-  collectEditedCodebook();
-  showToast(t("toast.batchApplied"));
+  markGioiaDirty();
+  $("gioiaStatus").textContent = t("gioia.batchStaged");
 }
 
-function collectEditedCodebook() {
-  const rows = Array.from(document.querySelectorAll("#gioiaTable tbody tr")).map((tr) => {
+function markGioiaDirty() {
+  state.gioiaDirty = true;
+  transitionWorkflow("edited");
+  const status = $("gioiaStatus");
+  if (status) {
+    status.classList.add("is-dirty");
+    status.textContent = t("gioia.dirty");
+  }
+  if ($("saveGioia")) $("saveGioia").disabled = false;
+  if ($("undoGioia")) $("undoGioia").disabled = false;
+}
+
+function collectGioiaRows() {
+  return Array.from(document.querySelectorAll("#gioiaTable tbody tr")).map((tr) => {
     const row = { old_code: tr.dataset.oldCode };
     tr.querySelectorAll("input").forEach((input) => (row[input.dataset.field] = input.value));
     return row;
   });
-  const entries = [];
-  const second = {};
-  const aggregate = {};
-  rows.forEach((row) => {
-    if (!row.code) return;
-    entries.push({ code: row.code, definition: row.definition || "", aliases: splitList(row.aliases), include: [], exclude: [], positive_examples: [], near_miss: [] });
-    if (row.second_order_theme) {
-      second[row.second_order_theme] = second[row.second_order_theme] || [];
-      second[row.second_order_theme].push(row.code);
-    }
-    if (row.second_order_theme && row.aggregate_dimension) {
-      aggregate[row.aggregate_dimension] = aggregate[row.aggregate_dimension] || [];
-      if (!aggregate[row.aggregate_dimension].includes(row.second_order_theme)) aggregate[row.aggregate_dimension].push(row.second_order_theme);
-    }
+}
+
+function validateGioiaRows(rows) {
+  const seen = new Set();
+  for (const row of rows) {
+    const code = String(row.code || "").trim();
+    if (!code) throw new Error(t("gioia.blankCode"));
+    const normalized = code.toLocaleLowerCase();
+    if (seen.has(normalized)) throw new Error(t("gioia.duplicateCode", { code }));
+    seen.add(normalized);
+  }
+}
+
+async function persistGioiaEdits({ codebookOverride = null, rowsOverride = null, recordHistory = true } = {}) {
+  const codebook = codebookOverride || state.editedCodebook || state.lastResult?.codebook;
+  if (!codebook) return null;
+  const rows = rowsOverride || collectGioiaRows();
+  validateGioiaRows(rows);
+  const response = await postJson("/api/align-codebook", {
+    codebook,
+    rows,
+    job_id: state.resultJobId || null,
   });
-  state.editedCodebook = { entries, second_order_themes: second, aggregate_dimensions: aggregate };
-  return state.editedCodebook;
+  const edited = response.codebook || response;
+  if (recordHistory) state.codebookHistory.push(structuredCloneSafe(codebook));
+  state.editedCodebook = edited;
+  if (response.result) state.lastResult = response.result;
+  else if (state.lastResult) state.lastResult.codebook = edited;
+  state.gioiaDirty = false;
+  transitionWorkflow("edited");
+  return edited;
+}
+
+async function saveGioiaEdits() {
+  const button = $("saveGioia");
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  try {
+    await persistGioiaEdits();
+    renderGioia(state.lastResult || { codebook: state.editedCodebook });
+    $("gioiaStatus").textContent = t("gioia.saved");
+    showToast(t("gioia.saved"));
+  } catch (error) {
+    $("gioiaStatus").textContent = error.message || t("toast.gioiaFailed");
+    showToast(error.message || t("toast.gioiaFailed"), { kind: "error" });
+  } finally {
+    if (button.isConnected) {
+      button.disabled = !state.gioiaDirty;
+      button.removeAttribute("aria-busy");
+    }
+  }
+}
+
+async function undoGioiaEdits() {
+  try {
+    if (state.gioiaDirty) {
+      state.gioiaDirty = false;
+      renderGioia(state.lastResult || { codebook: state.editedCodebook });
+      $("gioiaStatus").textContent = t("gioia.undone");
+      transitionWorkflow("succeeded");
+      return;
+    }
+    const previous = state.codebookHistory.pop();
+    if (!previous) return;
+    await persistGioiaEdits({
+      codebookOverride: previous,
+      rowsOverride: codebookRows(previous),
+      recordHistory: false,
+    });
+    renderGioia(state.lastResult || { codebook: state.editedCodebook });
+    $("gioiaStatus").textContent = t("gioia.undone");
+  } catch (error) {
+    $("gioiaStatus").textContent = error.message || t("toast.gioiaFailed");
+    showToast(error.message || t("toast.gioiaFailed"), { kind: "error" });
+  }
+}
+
+function structuredCloneSafe(value) {
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
 }
 
 function renderContrasts(result) {
@@ -1095,24 +1916,53 @@ function barList(rows, labelKey, valueKey, max) {
     .join("");
 }
 
-function activateTab(tab) {
+function handleTabKeydown(event) {
+  const tabs = Array.from(document.querySelectorAll('.tabs [role="tab"]'));
+  const current = tabs.indexOf(event.currentTarget);
+  if (current < 0) return;
+
+  let next = current;
+  if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
+  else if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = tabs.length - 1;
+  else return;
+
+  event.preventDefault();
+  activateTab(tabs[next].dataset.tab, { focus: true });
+}
+
+function activateTab(tab, { focus = false } = {}) {
+  let activeButton = null;
   document.querySelectorAll(".tab").forEach((button) => {
     const isActive = button.dataset.tab === tab;
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-selected", String(isActive));
+    button.tabIndex = isActive ? 0 : -1;
+    if (isActive) activeButton = button;
   });
-  document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `tab-${tab}`));
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    const isActive = panel.id === `tab-${tab}`;
+    panel.classList.toggle("active", isActive);
+    panel.hidden = !isActive;
+  });
+  if (focus && activeButton) activeButton.focus();
 }
 
 function downloadZip() {
-  if (!state.lastResult?.bundle_base64) return;
-  downloadBase64(state.lastResult.bundle_base64, "gtflow_output.zip", "application/zip");
-}
-
-function downloadEditedCodebook() {
-  const codebook = collectEditedCodebook();
-  const blob = new Blob([JSON.stringify(codebook, null, 2)], { type: "application/json" });
-  downloadBlob(blob, "codebook.edited.json");
+  if (state.bundleDownloadUrl) {
+    const link = document.createElement("a");
+    link.href = state.bundleDownloadUrl;
+    link.download = "gtflow_output.zip";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } else if (state.lastResult?.bundle_base64) {
+    downloadBase64(state.lastResult.bundle_base64, "gtflow_output.zip", "application/zip");
+  } else {
+    return;
+  }
+  transitionWorkflow("exported");
 }
 
 function downloadBase64(base64, filename, type) {
@@ -1133,10 +1983,6 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-function splitList(value) {
-  return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
-}
-
 function titleCase(value) {
   return String(value).replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -1149,11 +1995,13 @@ function escapeAttr(value) {
   return escapeHtml(value).replaceAll("\n", " ");
 }
 
-function showToast(message) {
+function showToast(message, { kind = "status" } = {}) {
   const existing = document.querySelector(".toast");
   if (existing) existing.remove();
   const node = document.createElement("div");
-  node.className = "toast";
+  node.className = `toast ${kind === "error" ? "toast-error" : ""}`.trim();
+  node.setAttribute("role", kind === "error" ? "alert" : "status");
+  node.setAttribute("aria-live", kind === "error" ? "assertive" : "polite");
   node.textContent = message;
   document.body.appendChild(node);
   window.setTimeout(() => node.remove(), 4200);

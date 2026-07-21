@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Python ${{ matrix.python-version }} compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package
+        run: python -m pip install .
+      - name: Check installed dependencies
+        run: python -m pip check
+      - name: Import package
+        run: python -c "import gtflow; print(gtflow.__version__)"
+
+  package:
+    name: Package and container verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Compile Python sources
+        run: python -m compileall -q gtflow
+      - name: Check browser JavaScript syntax
+        run: node --check gtflow/gui/static/app.js
+      - name: Build distributions
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Verify wheel contents in a clean environment
+        run: |
+          python -m venv /tmp/gtflow-wheel
+          /tmp/gtflow-wheel/bin/python -m pip install dist/*.whl
+          /tmp/gtflow-wheel/bin/python -m pip check
+          /tmp/gtflow-wheel/bin/python -c "from importlib.resources import files; root=files('gtflow'); assert root.joinpath('gui/static/index.html').is_file(); assert root.joinpath('prompts/open_coding_zh.yaml').is_file()"
+          /tmp/gtflow-wheel/bin/gtflow --help
+      - name: Build non-root container image
+        run: docker build --tag gtflow:ci .

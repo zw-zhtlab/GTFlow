@@ -19,14 +19,16 @@ def append_jsonl(path: str, records: Iterable[Any]) -> None:
 
 def iter_jsonl(path: str) -> Iterator[Any]:
     with open(path, "r", encoding="utf-8-sig") as f:
-        for line in f:
+        for line_no, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
                 continue
             try:
                 yield json.loads(line)
-            except Exception:
-                continue
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Invalid JSONL in {path} at line {line_no}: {exc.msg}"
+                ) from exc
 
 def iter_jsonl_batches(path: str, batch_size: int) -> Iterator[List[Any]]:
     batch: List[Any] = []
